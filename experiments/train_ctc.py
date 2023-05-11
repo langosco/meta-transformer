@@ -17,13 +17,15 @@ import os
 import argparse
 
 
+VAL_DATA_RATIO = 0.1
+
 def flatten(x):
     return jax.flatten_util.ravel_pytree(x)[0]
 
 
 # TODO replace all this with huggingface datasets
 def split_data(data: list, labels: list):
-    split_index = int(len(data)*0.8)
+    split_index = int(len(data)*(1-VAL_DATA_RATIO))
     return (data[:split_index], labels[:split_index], 
             data[split_index:], labels[split_index:])
 
@@ -90,9 +92,9 @@ def loss_fn(params, rng, data: Dict[str, ArrayLike], is_training: bool = True):
 
 
 @jit
-def val_metrics(rng, params, val_data):
+def get_acc_and_loss(rng, params, data):
     """Compute acc and loss on test set."""
-    loss, acc = loss_fn(params, rng, val_data, is_training=False)
+    loss, acc = loss_fn(params, rng, data, is_training=False)
     return {"val/acc": acc, "val/loss": loss}
 
 
@@ -111,7 +113,7 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
     opt: optax.GradientTransformation
 
     @functools.partial(jit, static_argnums=0)
-    def init_params(self, rng: jnp.ndarray, data: dict) -> dict:
+    def init_params(self, rng: ArrayLike, data: dict) -> dict:
         """Initializes state of the updater."""
         out_rng, subkey = jax.random.split(rng)
         params = model.init(subkey, data["input"])
@@ -145,7 +147,7 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
                             state: TrainState, 
                             data: dict) -> Tuple[TrainState, dict]:
         state.rng, subkey = random.split(state.rng)
-        return state, val_metrics(subkey, state.params, data)
+        return state, get_acc_and_loss(subkey, state.params, data)
 
 
 @chex.dataclass
@@ -171,14 +173,19 @@ class Logger:
                 wandb.log(metrics, step=state.step)
 
 
-def shuffle_data(rng: jnp.ndarray, inputs: jnp.ndarray, labels: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
+def shuffle_data(rng: ArrayLike, inputs: ArrayLike, labels: ArrayLike) -> Tuple[ArrayLike, ArrayLike]:
     """Shuffle the data."""
     idx = jnp.arange(len(inputs))
     idx = random.permutation(rng, idx)
     return inputs[idx], labels[idx]
 
 
-def data_iterator(inputs: jnp.ndarray, labels: jnp.ndarray, batchsize: int = 1048, skip_last: bool = False) -> Iterator[Tuple[jnp.ndarray, jnp.ndarray]]:
+def data_iterator(
+        inputs: ArrayLike, 
+        labels: ArrayLike, 
+        batchsize: int = 1048, 
+        skip_last: bool = False
+        ) -> Iterator[Tuple[ArrayLike, ArrayLike]]:
     """Iterate over the data in batches."""
     for i in range(0, len(inputs), batchsize):
         if skip_last and i + batchsize > len(inputs):
@@ -208,15 +215,19 @@ if __name__ == "__main__":
     NUM_EPOCHS = args.epochs
     TASK = args.task
     USE_WANDB = args.use_wandb
+    DATASET = "ctc_fixed_10k"
 
     # Load MNIST model checkpoints
     print(f"Training task: {TASK}.")
-    inputs, all_labels = load_nets(n=500, data_dir=os.path.join(nninn.data_dir, "ctc_fixed"), 
-                                flatten=False, verbose=False);
+    print("Loading data...")
+    all_inputs, all_labels = load_nets(
+        n=10000, data_dir=os.path.join(nninn.data_dir, DATASET), verbose=False);
     labels = all_labels[TASK]
-    filtered_inputs, filtered_labels = filter_data(inputs, labels)
-    train_inputs, train_labels, val_inputs, val_labels = split_data(filtered_inputs, filtered_labels)
+    filtered_inputs, filtered_labels = filter_data(all_inputs, labels)
+    train_inputs, train_labels, val_inputs, val_labels = split_data(
+        filtered_inputs, filtered_labels)
     val_data = {"input": utils.tree_stack(val_inputs), "label": val_labels}
+    print("Done.")
 
 
     wandb.init(
@@ -231,6 +242,7 @@ if __name__ == "__main__":
             "num_epochs": NUM_EPOCHS,
             "target_task": TASK,
             "dropout": 0.1,
+            "dataset": DATASET,
         },
         notes="First time trying out transformer meta-model.",
         )  # TODO properly set and log config
@@ -253,18 +265,32 @@ if __name__ == "__main__":
         "label": train_labels[:2]
         })
 
-    print("Number of parameters:", utils.count_params(state.params) / 1e6, "Million")
+    print("Number of parameters:",
+           utils.count_params(state.params) / 1e6, "Million")
 
     # Training loop
     for epoch in range(NUM_EPOCHS):
         rng, subkey = random.split(rng)
-        images, labels = shuffle_data(subkey, train_inputs, train_labels)
-        batches = data_iterator(images, labels, batchsize=BATCH_SIZE, skip_last=True)
+
+        # Prepare data
+        inputs, labels = shuffle_data(subkey, train_inputs, train_labels)
+        batches = data_iterator(
+            inputs, labels, batchsize=BATCH_SIZE, skip_last=True)
+        val_batches = data_iterator(
+            val_inputs, val_labels, batchsize=BATCH_SIZE, skip_last=False)
 
         # Validate every epoch
-        state, val_metrics_dict = updater.compute_val_metrics(state, val_data)
-        logger.log(state, val_metrics_dict)
+        valdata = []
+        for batch in val_batches:
+            batch["input"] = utils.tree_stack(batch["input"])
+            state, val_metrics_dict = updater.compute_val_metrics(
+                state, batch)
+            valdata.append(val_metrics_dict)
 
+        means = jax.tree_map(lambda *x: np.mean(x), *valdata)
+        logger.log(state, means)
+
+        # Train
         for batch in batches:
             batch["input"] = utils.tree_stack(batch["input"])
             state, train_metrics = updater.update(state, batch)
