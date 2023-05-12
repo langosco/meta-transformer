@@ -6,7 +6,8 @@ import numpy as np
 import collections
 import dataclasses
 import optax
-from typing import Optional, Mapping, Any
+from typing import Optional, Mapping, Any, Dict, Tuple
+from jax.typing import ArrayLike
 import datasets
 import dm_pix as pix
 
@@ -119,3 +120,11 @@ def tree_list(trees):
 def tree_stack(trees):
     """Stacks a list of trees into a single tree with an extra dimension."""
     return jax.tree_map(lambda *x: jnp.stack(x), *trees)
+
+
+def get_param_shapes(
+        params: Dict[str, Dict[str, ArrayLike]]) -> Dict[str, Dict[str, Tuple[int, ...]]]:
+    return {
+        k: {subk: v.shape for subk, v in layer.items()}
+        for k, layer in params.items()
+    }

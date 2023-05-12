@@ -209,38 +209,37 @@ class NetUnEmbedding(hk.Module):
 
 @dataclasses.dataclass
 class MetaModelClassifier(hk.Module):
-  """A simple meta-model."""
+    """A simple meta-model."""
 
-  transformer: Transformer
-  model_size: int
-  num_classes: int
-  name: Optional[str] = None
-  chunk_size: Optional[int] = 4
+    transformer: Transformer
+    model_size: int
+    num_classes: int
+    name: Optional[str] = None
 
-  def __call__(
-      self,
-      input_params: dict,
-      *,
-      is_training: bool = True,
-  ) -> jax.Array:
-    """Forward pass. Returns a sequence of logits."""
-    net_embed = NetEmbedding(embed_dim=self.model_size)
-    embeddings = hk.vmap(net_embed, split_rng=False)(input_params)  # [B, T, D]
-    _, seq_len, _ = embeddings.shape
+    def __call__(
+        self,
+        input_params: dict,
+        *,
+        is_training: bool = True,
+    ) -> jax.Array:
+        """Forward pass. Returns a sequence of logits."""
+        net_embed = NetEmbedding(embed_dim=self.model_size)
+        embeddings = hk.vmap(net_embed, split_rng=False)(input_params)  # [B, T, D]
+        _, seq_len, _ = embeddings.shape
 
-    # Add positional embeddings.
-    positional_embeddings = hk.get_parameter(
-        'positional_embeddings', [seq_len, self.model_size], init=jnp.zeros)
-    input_embeddings = embeddings + positional_embeddings  # [B, T, D]
+        # Add positional embeddings.
+        positional_embeddings = hk.get_parameter(
+            'positional_embeddings', [seq_len, self.model_size], init=jnp.zeros)
+        input_embeddings = embeddings + positional_embeddings  # [B, T, D]
 
-    # Run the transformer over the inputs.
-    embeddings = self.transformer(
-        input_embeddings,
-        is_training=is_training,
-    )  # [B, T, D]
+        # Run the transformer over the inputs.
+        embeddings = self.transformer(
+            input_embeddings,
+            is_training=is_training,
+        )  # [B, T, D]
 
-    first_out = embeddings[:, 0, :]  # [B, V]
-    return hk.Linear(self.num_classes, name="linear_output")(first_out)  # [B, V]
+        first_out = embeddings[:, 0, :]  # [B, V]
+        return hk.Linear(self.num_classes, name="linear_output")(first_out)  # [B, V]
 
 
 @chex.dataclass
@@ -276,3 +275,39 @@ def create_meta_model_classifier(
             ))
         return net(params_batch, is_training=is_training)
     return model
+
+
+@dataclasses.dataclass
+class MetaModel(hk.Module):
+    """A meta-model that returns neural network parameters."""
+
+    transformer: Transformer
+    model_size: int
+    name: Optional[str] = None
+
+    def __call__(
+            self,
+            input_params: dict,
+            *,
+            is_training: bool = True,
+        ) -> jax.Array:
+        """Forward pass. Returns a sequence of logits."""
+        self.param_shapes = utils.get_param_shapes(input_params)
+
+        net_embed = NetEmbedding(embed_dim=self.model_size)
+        embeddings = hk.vmap(net_embed, split_rng=False)(input_params)  # [B, T, D]
+        _, seq_len, _ = embeddings.shape
+
+        # Add positional embeddings.
+        positional_embeddings = hk.get_parameter(
+        'positional_embeddings', [seq_len, self.model_size], init=jnp.zeros)
+        input_embeddings = embeddings + positional_embeddings  # [B, T, D]
+
+        # Run the transformer over the inputs.
+        embeddings = self.transformer(
+        input_embeddings,
+        is_training=is_training,
+        )  # [B, T, D]
+
+        net_unembed = NetUnEmbedding(self.param_shapes)
+        return hk.vmap(net_unembed, split_rng=False)(embeddings)  # dict
