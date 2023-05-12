@@ -15,5 +15,6 @@ setup(name='meta-transformer',
         "optax",
         "pandas",
         "wandb",
+        "pytest",
         ],
     )

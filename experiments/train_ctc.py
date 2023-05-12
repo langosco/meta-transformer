@@ -8,10 +8,11 @@ import chex
 import functools
 from typing import Mapping, Any, Tuple, List, Iterator, Optional, Dict
 from jax.typing import ArrayLike
-from meta_transformer import utils, meta_model, MetaModelClassifier, Transformer
-import matplotlib.pyplot as plt
+from meta_transformer import utils
+from meta_transformer.meta_model import create_meta_model_classifier
+from meta_transformer.meta_model import MetaModelClassifierConfig as ModelConfig
 import wandb
-from nninn.repl.utils import load_nets, classes_per_task, random_data_view, shuffle_and_split_data
+from nninn.repl.utils import load_nets, classes_per_task
 import nninn
 import os
 import argparse
@@ -74,41 +75,6 @@ def create_loss_fn(model_forward: callable):
         acc = acc_from_logits(logits, targets)
         return loss, acc
     return loss_fn
-
-
-# Model
-@chex.dataclass
-class ModelConfig:
-    """Hyperparameters for the model."""
-    num_heads: int = 4
-    num_layers: int = 2
-    dropout_rate: float = 0.1
-    model_size: int = 128
-    num_classes: int = 4
-
-    def __post_init__(self):
-        self.key_size = self.model_size // self.num_heads
-        if self.model_size % self.num_heads != 0:
-            raise ValueError(
-                f"model_size ({self.model_size}) must be "
-                "divisible by num_heads ({self.num_heads})")
-
-
-def create_model(config: ModelConfig):
-    @hk.transform
-    def model(params_batch: dict, 
-              is_training: bool = True) -> ArrayLike:
-        net = MetaModelClassifier(
-            model_size=config.model_size,
-            num_classes=config.num_classes,
-            transformer=Transformer(
-                num_heads=config.num_heads,
-                num_layers=config.num_layers,
-                key_size=config.key_size,
-                dropout_rate=config.dropout_rate,
-            ))
-        return net(params_batch, is_training=is_training)
-    return model
 
 
 # Optimizer and update function
@@ -186,7 +152,8 @@ class Logger:
         metrics = train_metrics or {}
         if val_metrics is not None:
             metrics.update(val_metrics)
-        metrics = {k: float(v) for k, v in metrics.items() if k != "step"}
+        metrics = {k: v.item() if isinstance(v, jnp.ndarray) else v
+                   for k, v in metrics.items()}
         if state.step % self.log_interval == 0 or val_metrics is not None:
             print(", ".join([f"{k}: {round(v, 3)}" for k, v in metrics.items()]))
             if not self.disable_wandb:
@@ -310,7 +277,7 @@ if __name__ == "__main__":
 
     # Initialization
     opt = optax.adamw(LEARNING_RATE, weight_decay=WEIGHT_DECAY)
-    model = create_model(model_config)
+    model = create_meta_model_classifier(model_config)
     loss_fn = create_loss_fn(model.apply)
     updater = Updater(opt=opt, model=model, loss_fn=loss_fn)
     logger = Logger(log_interval=5)
