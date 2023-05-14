@@ -20,30 +20,30 @@ class MetaModelClassifier(hk.Module):
     model_size: int
     num_classes: int
     name: Optional[str] = None
+    use_embedding: Optional[bool] = False
 
     def __call__(
         self,
-        input_params: dict,
+        inputs: ArrayLike,  # dict
         *,
         is_training: bool = True,
     ) -> jax.Array:
         """Forward pass. Returns a sequence of logits."""
-        net_embed = NetEmbedding(embed_dim=self.model_size)
-        embeddings = hk.vmap(net_embed, split_rng=False)(input_params)  # [B, T, D]
-        _, seq_len, _ = embeddings.shape
+        #net_embed = NetEmbedding(embed_dim=self.model_size)
+        #inputs = hk.vmap(net_embed, split_rng=False)(inputs)
+        if self.use_embedding:
+            inputs = hk.Linear(self.model_size)(inputs)
+        _, seq_len, _ = inputs.shape
 
         # Add positional embeddings.
         positional_embeddings = hk.get_parameter(
             'positional_embeddings', [seq_len, self.model_size], init=jnp.zeros)
-        input_embeddings = embeddings + positional_embeddings  # [B, T, D]
+        inputs = inputs + positional_embeddings  # [B, T, D]
 
         # Run the transformer over the inputs.
-        embeddings = self.transformer(
-            input_embeddings,
-            is_training=is_training,
-        )  # [B, T, D]
+        outputs = self.transformer(inputs, is_training=is_training)
 
-        first_out = embeddings[:, 0, :]  # [B, V]
+        first_out = outputs[:, 0, :]  # [B, D]
         return hk.Linear(self.num_classes, name="linear_output")(first_out)  # [B, V]
 
 
@@ -51,6 +51,7 @@ class MetaModelClassifier(hk.Module):
 class MetaModelClassifierConfig(TransformerConfig):
     """Hyperparameters for the model."""
     num_classes: int = 4
+    use_embedding: bool = False
 
 
 def create_meta_model_classifier(
@@ -61,6 +62,7 @@ def create_meta_model_classifier(
         net = MetaModelClassifier(
             model_size=config.model_size,
             num_classes=config.num_classes,
+            use_embedding=config.use_embedding,
             transformer=Transformer(
                 num_heads=config.num_heads,
                 num_layers=config.num_layers,

@@ -8,7 +8,7 @@ import chex
 import functools
 from typing import Mapping, Any, Tuple, List, Iterator, Optional, Dict
 from jax.typing import ArrayLike
-from meta_transformer import utils
+from meta_transformer import utils, preprocessing
 from meta_transformer.meta_model import create_meta_model_classifier
 from meta_transformer.meta_model import MetaModelClassifierConfig as ModelConfig
 import wandb
@@ -192,6 +192,8 @@ if __name__ == "__main__":
                         "batch_size", "augmentation", "optimizer", \
                         "activation", "initialization"', default="batch_size")
     parser.add_argument('--use_wandb', action='store_true', help='Use wandb')
+    parser.add_argument('--ndata', type=int, help='Number of data points',
+                        default=10000)
     args = parser.parse_args()
 
 
@@ -205,21 +207,30 @@ if __name__ == "__main__":
     DATASET = "ctc_fixed_10k"
     FILTER = False
 
+    CHUNK_SIZE = 512
+    D_MODEL = 256
+
     NOTES = "Training on bigger dataset (10k)."
 
     # Load MNIST model checkpoints
     print(f"Training task: {TASK}.")
     print("Loading data...")
     all_inputs, all_labels = load_nets(
-        n=10000, data_dir=os.path.join(nninn.data_dir, DATASET), verbose=False);
+        n=args.ndata, data_dir=os.path.join(nninn.data_dir, DATASET), verbose=False);
     labels = all_labels[TASK]
+
+    unpreprocess = preprocessing.get_unpreprocess(all_inputs[0], CHUNK_SIZE)
+    print("Preprocessing data...")
+    all_inputs = [preprocessing.preprocess(inp, CHUNK_SIZE)[0]
+                  for inp in all_inputs]
+    all_inputs = np.stack(all_inputs, axis=0)
+
     if FILTER:
         all_inputs, labels = filter_data(all_inputs, labels)
     else:
         all_inputs, labels = np.array(all_inputs), np.array(labels)  # TODO do this in dataloader instead
     train_inputs, train_labels, val_inputs, val_labels = split_data(
         all_inputs, labels)
-    val_data = {"input": utils.tree_stack(val_inputs), "label": val_labels}
     print("Done.")
 
 
@@ -243,10 +254,11 @@ if __name__ == "__main__":
 
     model_config = ModelConfig(
         num_classes=classes_per_task[TASK],
-        model_size=256,
+        model_size=D_MODEL,
         num_heads=4,
         num_layers=8,
         dropout_rate=0.1,
+        use_embedding=True,
     )
 
 
@@ -283,7 +295,7 @@ if __name__ == "__main__":
     logger = Logger(log_interval=5)
     rng, subkey = random.split(rng)
     state = updater.init_params(subkey, {
-        "input": utils.tree_stack(train_inputs[:2]),
+        "input": train_inputs[:2],
         "label": train_labels[:2]
         })
 
@@ -304,7 +316,6 @@ if __name__ == "__main__":
         # Validate every epoch
         valdata = []
         for batch in val_batches:
-            batch["input"] = utils.tree_stack(batch["input"])
             state, val_metrics_dict = updater.compute_val_metrics(
                 state, batch)
             val_metrics_dict.update({"epoch": epoch})
@@ -315,7 +326,6 @@ if __name__ == "__main__":
 
         # Train
         for batch in batches:
-            batch["input"] = utils.tree_stack(batch["input"])
             state, train_metrics = updater.update(state, batch)
             train_metrics.update({"epoch": epoch})
             logger.log(state, train_metrics)
