@@ -226,6 +226,7 @@ if __name__ == "__main__":
         num_heads=8,
         num_layers=12,
         dropout_rate=0.0,
+        use_embedding=True,
     )
 
 

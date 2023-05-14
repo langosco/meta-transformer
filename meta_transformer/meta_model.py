@@ -89,6 +89,7 @@ class MetaModel(hk.Module):
             is_training: bool = True,
         ) -> jax.Array:
         """Forward pass. Returns a sequence of output embeddings."""
+        input_shape = inputs.shape[-1]
         if self.use_embedding:
             inputs = hk.Linear(self.model_size)(inputs)
         _, seq_len, _ = inputs.shape
@@ -103,11 +104,14 @@ class MetaModel(hk.Module):
             inputs, is_training=is_training)  # [B, T, D]
 
         if self.use_embedding:
-            outputs = hk.Linear(inputs.shape[-1])(outputs)
+            outputs = hk.Linear(input_shape)(outputs)
         return outputs
 
 
-MetaModelConfig = TransformerConfig
+@chex.dataclass
+class MetaModelConfig(TransformerConfig):
+    """Hyperparameters for the model."""
+    use_embedding: bool = False
 
 
 def create_meta_model(
@@ -117,6 +121,7 @@ def create_meta_model(
               is_training: bool = True) -> ArrayLike:
         net = MetaModel(
             model_size=config.model_size,
+            use_embedding=config.use_embedding,
             transformer=Transformer(
                 num_heads=config.num_heads,
                 num_layers=config.num_layers,
