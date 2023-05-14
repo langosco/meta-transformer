@@ -12,6 +12,7 @@ import datasets
 import dm_pix as pix
 
 
+# TODO put image utils in a separate file
 # Data
 def load_data(dataset_name: str = "mnist"):
     """Load mnist, cifar10 or cifar100 dataset."""
@@ -120,11 +121,3 @@ def tree_list(trees):
 def tree_stack(trees):
     """Stacks a list of trees into a single tree with an extra dimension."""
     return jax.tree_map(lambda *x: jnp.stack(x), *trees)
-
-
-def get_param_shapes(
-        params: Dict[str, Dict[str, ArrayLike]]) -> Dict[str, Dict[str, Tuple[int, ...]]]:
-    return {
-        k: {subk: v.shape for subk, v in layer.items()}
-        for k, layer in params.items()
-    }
