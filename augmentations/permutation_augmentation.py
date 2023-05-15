@@ -7,6 +7,7 @@ import jax.numpy as jnp
 from jax import random, jit, vmap
 import math
 import numpy as np
+import time
 
 from typing import List
 from functools import partial
@@ -22,6 +23,8 @@ def permute_checkpoint(rng, checkpoint,
     Returns:
         model checkpoint with permuted weights 
     """
+    if num_permutations is None:
+        permutation_mode = 'complete'
     permutation_list, rng = __get_permutations_per_layer(rng, checkpoint, permute_layers, 
                                                     permutation_mode=permutation_mode,
                                                     num_permute = num_permutations)
@@ -56,8 +59,8 @@ def __get_permutations_per_layer(rng, checkpoint, permute_layers, permutation_mo
                 permutations[layer].append(np.array(index_new))
         elif permutation_mode == "random":
             # save a fixed number of permutations
-            num_permute_l = min(num_permute//len(permute_layers), 
-                                  __approximate_num_permutations(kernel))
+            num_permute_l = max(1,min(num_permute//len(permute_layers), 
+                                  __approximate_num_permutations(kernel)))
             index_new = index_old
             for i in range(num_permute_l):
                 rng, subkey = random.split(rng, 2)
@@ -67,7 +70,7 @@ def __get_permutations_per_layer(rng, checkpoint, permute_layers, permutation_mo
     return permutations, rng      
 
 def __approximate_num_permutations(n):
-    return int(round(math.sqrt(2*math.pi*n) * (n/math.e)**n))
+    return int(round(math.sqrt(2*math.pi*n) * (n/math.e)**n))+1
 
 def __get_permutation_combinations(rng, layer_permutations, permutation_mode='random', num_permute=100):
     if permutation_mode=='complete':
@@ -152,7 +155,7 @@ def __get_next_layer(checkpoint, layer):
 if __name__=='__main__':    
     from model_zoo_jax.zoo_dataloader import load_nets
     
-    inputs, all_labels = load_nets(n=2, 
+    inputs, all_labels = load_nets(n=32, 
                                    data_dir='model_zoo_jax/checkpoints/mnist_smallCNN_fixed_zoo',
                                    flatten=False,
                                    num_checkpoints=1)
@@ -167,9 +170,18 @@ if __name__=='__main__':
                        permutation_mode="random",
                        num_permutations=4)
     
-    print(params["cnn/conv2_d_1"]['w'][0,0,0,:])
-    print(params['cnn/conv2_d_2']['w'][0,0,:,0])
+    start = time.time()
+    result = []
+    for i in range(len(inputs)):
+        params = inputs[0]
+        rng,subkey = random.split(rng)
+        result = result + permute_checkpoint(subkey,params,num_permutations=2)
+    end = time.time()
+    print("one batch takes: {}".format(end-start))
+    print("num models: {}".format(len(result)))
+    #print(params["cnn/conv2_d_1"]['w'][0,0,0,:])
+    #print(params['cnn/conv2_d_2']['w'][0,0,:,0])
     #print(permutations[0]["cnn/conv2_d_1"]['w'][0,0,0,:])
-    print(permutations[1]["cnn/conv2_d_1"]['w'][0,0,0,:])
-    print(permutations[1]['cnn/conv2_d_2']['w'][0,0,:,0])
+    #print(permutations[1]["cnn/conv2_d_1"]['w'][0,0,0,:])
+    #print(permutations[1]['cnn/conv2_d_2']['w'][0,0,:,0])
     #print(permutations[2]["cnn/conv2_d_1"]['w'][0,0,0,:])
