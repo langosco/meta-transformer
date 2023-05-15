@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(name='meta-transformer',
       version='0.0.1',
-      packages=["meta_transformer"],
+      packages=["meta_transformer", "augmentations"],
       install_requires=[
         "chex",
         "datasets",
@@ -17,6 +17,6 @@ setup(name='meta-transformer',
         "pytest",
         "torch",
         "torchvision",
-        "PIL",
+        "pillow",
         ],
     )
