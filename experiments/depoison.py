@@ -49,20 +49,21 @@ def load_and_process_nets(name: str, n: int):
             module_path, "data/cache/depoisoning", name)
     os.makedirs(os.path.dirname(path_to_processed), exist_ok=True)
 
-    if os.path.exists(path_to_processed) and n == 10000:
+    # TODO load and save the function as well
+    if False: #os.path.exists(path_to_processed) and n == 10000:
         inputs = np.load(path_to_processed)
     else:
-        inputs = torch_utils.load_pytorch_nets(
+        inputs, get_pytorch_model = torch_utils.load_pytorch_nets(
             n=n, data_dir=os.path.join(DATA_DIR, name)
         )
         unpreprocess = preprocessing.get_unpreprocess(inputs[0], CHUNK_SIZE)
         inputs = np.stack([preprocessing.preprocess(inp, CHUNK_SIZE)[0]
                       for inp in inputs])
 
-    if n == 10000:
+    if False: #n == 10000:
         np.save(path_to_processed, inputs)
 
-    return inputs / DATA_STD
+    return inputs / DATA_STD, get_pytorch_model
 
 
 if __name__ == "__main__":
@@ -93,8 +94,8 @@ if __name__ == "__main__":
 
     # Load model checkpoints
     print("Loading data...")
-    inputs = load_and_process_nets(name="poison_easy", n=args.ndata)
-    targets = load_and_process_nets(name="clean", n=args.ndata)
+    inputs, get_pytorch_model = load_and_process_nets(name="poison_easy", n=args.ndata)
+    targets, _ = load_and_process_nets(name="clean", n=args.ndata)
 
     if FILTER:
         inputs, targets = preprocessing.filter_data(inputs, targets)

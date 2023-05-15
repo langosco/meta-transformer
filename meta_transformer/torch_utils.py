@@ -52,23 +52,29 @@ def load_model(model, path):
 
 def get_param_dict(model: torch.nn.Module) -> dict:
     params = {}
-    for i, layer in enumerate(model.modules()):
-        if isinstance(layer, (nn.Conv2d, nn.Linear)):
-            params[f'{layer._get_name()}_{i}'] = dict(
-                w=layer.weight.detach().numpy(),
-                b=layer.bias.detach().numpy()
-            )
-        elif isinstance(layer, (nn.BatchNorm2d, nn.BatchNorm1d, nn.ReLU, nn.MaxPool2d)):
-            pass
-        else:
-            raise ValueError(f'Unknown layer {layer}.')
+    i = 0
+    for c in model.children():
+        for layer in c:
+            if isinstance(layer, (nn.Conv2d, nn.Linear)):
+                params[f'{layer._get_name()}_{i}'] = dict(
+                    w=layer.weight.detach().numpy(),
+                    b=layer.bias.detach().numpy()
+                )
+                i += 1
+            elif isinstance(layer, (nn.BatchNorm2d, nn.BatchNorm1d, nn.ReLU, nn.MaxPool2d)):
+                pass
+            else:
+                raise ValueError(f'Unknown layer {layer}.')
             
     def get_pytorch_model(params: dict) -> torch.nn.Module:
         """Map params back to a pytorch model (the inverse)."""
-        for i, layer in enumerate(model.modules()):
-            if isinstance(layer, (nn.Conv2d, nn.Linear)):
-                layer.weight = nn.Parameter(torch.from_numpy(params[f'{layer._get_name()}_{i}']['w']))
-                layer.bias = nn.Parameter(torch.from_numpy(params[f'{layer._get_name()}_{i}']['b']))
+        j = 0
+        for c in model.modules():
+            for layer in c:
+                if isinstance(layer, (nn.Conv2d, nn.Linear)):
+                    layer.weight = nn.Parameter(torch.from_numpy(params[f'{layer._get_name()}_{j}']['w']))
+                    layer.bias = nn.Parameter(torch.from_numpy(params[f'{layer._get_name()}_{j}']['b']))
+                    j += 1
         return model
 
     return params, get_pytorch_model

@@ -14,8 +14,8 @@ import numpy as np
 
 def skip_layer(layer_name: str) -> bool:
     """Skip certain layers when chunking and unchunking."""
-    skip_list = ['layer_norm', 'dropout', 'batch_norm']
-    return any([s in layer_name for s in skip_list])
+    skip_list = ['dropout', 'norm']
+    return any([s in layer_name.lower() for s in skip_list])
 
 
 def pad_to_chunk_size(arr: ArrayLike, chunk_size: int) -> np.ndarray:
@@ -35,11 +35,11 @@ def filter_layers(
 
     output_layers = {}
     removed_layers = {}
-    approved_layers = ['conv', 'linear', 'HEAD', 'MLP']
+    approved_layers = ['conv', 'linear', 'head', 'mlp']
     for k, v in params.items():
         if skip_layer(k):
             removed_layers[k] = v
-        elif any([l in k for l in approved_layers]):
+        elif any([l in k.lower() for l in approved_layers]):
             output_layers[k] = v
         else:
             raise ValueError(f"Invalid layer: {k}.")
