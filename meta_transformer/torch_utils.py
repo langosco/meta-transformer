@@ -1,7 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.init as init
-import torch.nn.functional as F
 import os
 
 
@@ -54,6 +52,30 @@ def load_model(model, path):
 
 def get_param_dict(model: torch.nn.Module) -> dict:
     params = {}
+    for i, layer in enumerate(model.modules()):
+        if isinstance(layer, (nn.Conv2d, nn.Linear)):
+            params[f'{layer._get_name()}_{i}'] = dict(
+                w=layer.weight.detach().numpy(),
+                b=layer.bias.detach().numpy()
+            )
+        elif isinstance(layer, (nn.BatchNorm2d, nn.BatchNorm1d, nn.ReLU, nn.MaxPool2d)):
+            pass
+        else:
+            raise ValueError(f'Unknown layer {layer}.')
+            
+    def get_pytorch_model(params: dict) -> torch.nn.Module:
+        """Map params back to a pytorch model (the inverse)."""
+        for i, layer in enumerate(model.modules()):
+            if isinstance(layer, (nn.Conv2d, nn.Linear)):
+                layer.weight = nn.Parameter(torch.from_numpy(params[f'{layer._get_name()}_{i}']['w']))
+                layer.bias = nn.Parameter(torch.from_numpy(params[f'{layer._get_name()}_{i}']['b']))
+        return model
+
+    return params, get_pytorch_model
+
+
+def _get_param_dict(model: torch.nn.Module) -> dict:
+    params = {}
     for c in model.children():
         conv_i = 0
         linear_i = 0
@@ -84,6 +106,9 @@ def get_param_dict(model: torch.nn.Module) -> dict:
 
 
 def load_pytorch_nets(n: int, data_dir: str):
+    # raise error if data_dir does not exist
+    if not os.path.exists(data_dir):
+        raise ValueError(f'{data_dir} does not exist.')
     prefix = 'clean' if 'clean' in data_dir else 'poison'
     nets = []
     count = 0
@@ -96,7 +121,8 @@ def load_pytorch_nets(n: int, data_dir: str):
             if count > n:
                 break
             path = os.path.join(data_dir, f'{prefix}_{stri[:2]}_0{stri[2:]}.pth')
-            nets.append(get_param_dict(load_model(pt_model, path)))
+            net, get_pytorch_model = get_param_dict(load_model(pt_model, path))
+            nets.append(net)
         except FileNotFoundError:
             pass
-    return nets
+    return nets, get_pytorch_model
