@@ -12,7 +12,7 @@ from typing import List
 from functools import partial
 
 def permute_checkpoint(rng, checkpoint, 
-                       permute_layers:List[str]=["cnn/conv2_d_1","cnn/linear"],
+                       permute_layers:List[str]=["cnn/conv2_d_1", "cnn/linear"],
                        permutation_mode: str = "random",
                        num_permutations: int = 50):
     """
@@ -49,11 +49,11 @@ def __get_permutations_per_layer(rng, checkpoint, permute_layers, permutation_mo
         else:
             raise ValueError("permutations for layers of this type are not available")
         # generate lists of permuted indices
-        index_old = jnp.arange(kernel)
+        index_old = np.arange(kernel)
         if permutation_mode == "complete":
             # save all possible permutations
             for index_new in itertools.permutations(index_old, kernel):
-                permutations[layer].append(jnp.array(index_new))
+                permutations[layer].append(np.array(index_new))
         elif permutation_mode == "random":
             # save a fixed number of permutations
             num_permute_l = min(num_permute//len(permute_layers), 
@@ -62,7 +62,7 @@ def __get_permutations_per_layer(rng, checkpoint, permute_layers, permutation_mo
             for i in range(num_permute_l):
                 rng, subkey = random.split(rng, 2)
                 index_new = random.permutation(subkey, index_new)
-                permutations[layer].append(jnp.array(index_new))
+                permutations[layer].append(np.array(index_new))
         
     return permutations, rng      
 
@@ -76,7 +76,7 @@ def __get_permutation_combinations(rng, layer_permutations, permutation_mode='ra
         for layer, perms in layer_permutations.items():
             perms_indices = list(range(len(perms)))
             combination_list.append(perms_indices)
-        combinations = jnp.array(list(itertools.product(*combination_list)))
+        combinations = np.array(list(itertools.product(*combination_list)))
         # shuffle combinations
         rng,subkey = random.split(rng,2)
         combinations = random.permutation(subkey,combinations)
@@ -89,14 +89,14 @@ def __get_permutation_combinations(rng, layer_permutations, permutation_mode='ra
             combination_list = {}
             for layer, perms in layer_permutations.items():
                 rng,subkey = random.split(rng,2)
-                perm = random.choice(subkey,jnp.array(perms))
+                perm = random.choice(subkey,np.array(perms))
                 combination_list[layer]=perm
             combinations.append(combination_list)
             
     return combinations, rng
 
 def perform_single_permutation(checkpoint_in, permutations):
-    checkpoint = jax.tree_util.tree_map(lambda x: jnp.copy(x), checkpoint_in)
+    checkpoint = jax.tree_util.tree_map(lambda x: np.copy(x), checkpoint_in)
     
     for layer, index_new in permutations.items():
         #index_old = jnp.arange(len(index_new))

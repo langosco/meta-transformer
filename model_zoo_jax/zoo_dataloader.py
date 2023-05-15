@@ -125,9 +125,13 @@ def load_nets(n:int=500,
             labels = insert_all_targets(labels,current_config,metrics)
                 
             checkp = checkp+1 
+            l = len(nets)
+            #print(l,' ',checkp,' ', dir_name)
+            if l%100==0:
+                print('Loaded: {}/{}'.format(l,n))
             if (num_checkpoints is not None) and (checkp >= num_checkpoints):
                 break
-            if n is not None and len(nets) == n:
+            if n is not None and l == n:
                 break
             
         if n is not None and len(nets) == n:
@@ -162,6 +166,7 @@ def shuffle_data(rng: jnp.ndarray,
             for j in range(chunks):
                 expanded_index.append(i*chunks+j)
         index = jnp.array(expanded_index,dtype=jnp.int32)
+        print(index)
     else:
         index = jnp.arange(len(inputs))
         index = random.permutation(rng,index)

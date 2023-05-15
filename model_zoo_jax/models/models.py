@@ -5,8 +5,8 @@ import jax.numpy as jnp
 
 from meta_transformer.utils import process_datapoint
 
-from models.cnn import *
-from models.resnet import *
+from model_zoo_jax.models.cnn import *
+from model_zoo_jax.models.resnet import *
 
 def get_initializer(name):
     if name is None:
