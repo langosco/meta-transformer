@@ -1,4 +1,3 @@
-import jax
 from jax import random, jit, value_and_grad, nn
 import jax.numpy as jnp
 import numpy as np
@@ -17,39 +16,12 @@ import nninn
 import os
 import argparse
 from dataclasses import asdict
+from meta_transformer.train import Updater, Logger
+from meta_transformer.data import data_iterator, shuffle_arrays, split_data
+import jax
 
 
 VAL_DATA_RATIO = 0.1
-
-
-def flatten(x):
-    return jax.flatten_util.ravel_pytree(x)[0]
-
-
-# TODO replace all this with huggingface datasets
-def split_data(data: list, labels: list):
-    split_index = int(len(data)*(1-VAL_DATA_RATIO))
-    return (data[:split_index], labels[:split_index], 
-            data[split_index:], labels[split_index:])
-
-
-def is_fine(params: dict):
-    """Return false if std or mean is too high."""
-    flat = flatten(params)
-    if flat.std() > 5.0 or jnp.abs(flat.mean()) > 5.0:
-        return False
-    else:
-        return True
-
-
-def filter_data(data: List[dict], labels: List[ArrayLike]):
-    """Given a list of net params, filter out those
-    with very large means or stds."""
-    assert len(data) == len(labels)
-    f_data, f_labels = zip(*[(x, y) for x, y in zip(data, labels) if is_fine(x)])
-    print(f"Filtered out {len(data) - len(f_data)} nets.\
-          That's {100*(len(data) - len(f_data))/len(data):.2f}%.")
-    return np.array(f_data), np.array(f_labels)
 
 
 def acc_from_logits(logits, targets):
@@ -68,117 +40,14 @@ def loss_from_logits(logits, targets):
 def create_loss_fn(model_forward: callable):
     """model_forward = model.apply if model is a hk.transform"""
     def loss_fn(params, rng, data: Dict[str, ArrayLike], is_training: bool = True):
-        """data is a dict with keys 'input' and 'label'."""
-        inputs, targets = data["input"], data["label"]
+        """data is a dict with keys 'input' and 'target'."""
+        inputs, targets = data["input"], data["target"]
         logits = model_forward(params, rng, inputs, is_training)  # [B, C]
         loss = loss_from_logits(logits, targets)
         acc = acc_from_logits(logits, targets)
-        return loss, acc
+        return loss, {"acc": acc}
     return loss_fn
 
-
-# Optimizer and update function
-@chex.dataclass
-class TrainState:
-    step: int
-    rng: random.PRNGKey
-    opt_state: optax.OptState
-    params: dict
-
-
-@chex.dataclass(frozen=True)  # needs to be immutable to be hashable (for static_argnums)
-class Updater: # Could also make this a function of loss_fn, model.apply, etc if we want to be flexible
-    """Holds training methods. All methods are jittable."""
-    opt: optax.GradientTransformation
-    model: hk.TransformedWithState
-    loss_fn: callable
-
-    def get_acc_and_loss(self, rng, params, data):
-        """Compute acc and loss on test set."""
-        loss, acc = self.loss_fn(params, rng, data, is_training=False)
-        return {"val/acc": acc, "val/loss": loss}
-
-    @functools.partial(jit, static_argnums=0)
-    def init_params(self, rng: ArrayLike, data: dict) -> dict:
-        """Initializes state of the updater."""
-        out_rng, subkey = jax.random.split(rng)
-        params = self.model.init(subkey, data["input"])
-        opt_state = self.opt.init(params)
-        return TrainState(
-            step=0,
-            rng=out_rng,
-            opt_state=opt_state,
-            params=params,
-        )
-    
-    @functools.partial(jit, static_argnums=0)
-    def update(self, state: TrainState, data: dict) -> Tuple[TrainState, dict]:
-        state.rng, subkey = jax.random.split(state.rng)
-        (loss, acc), grads = value_and_grad(self.loss_fn, has_aux=True)(
-                state.params, subkey, data)
-        updates, state.opt_state = self.opt.update(
-            grads, state.opt_state, state.params)
-        state.params = optax.apply_updates(state.params, updates)
-        metrics = {
-                "train/loss": loss,
-                "train/acc": acc,
-                "step": state.step,
-        }
-        state.step += 1
-        return state, metrics
-
-
-    @functools.partial(jit, static_argnums=0)
-    def compute_val_metrics(self, 
-                            state: TrainState, 
-                            data: dict) -> Tuple[TrainState, dict]:
-        state.rng, subkey = random.split(state.rng)
-        return state, self.get_acc_and_loss(subkey, state.params, data)
-
-
-@chex.dataclass
-class Logger:
-    # TODO: keep state for metrics instead of just pushing to wandb?
-    # TODO: keep state in between log_intervals; compute mean of 
-    # train_acc and train_loss, and then log that at the end 
-    # of the interval. Also keep track of val_acc and val_loss.
-    log_interval: int = 50
-    disable_wandb: bool = False
-
-    def log(self,
-            state: TrainState,
-            train_metrics: dict = None,
-            val_metrics: dict = None):
-        metrics = train_metrics or {}
-        if val_metrics is not None:
-            metrics.update(val_metrics)
-        metrics = {k: v.item() if isinstance(v, jnp.ndarray) else v
-                   for k, v in metrics.items()}
-        if state.step % self.log_interval == 0 or val_metrics is not None:
-            print(", ".join([f"{k}: {round(v, 3)}" for k, v in metrics.items()]))
-            if not self.disable_wandb:
-                wandb.log(metrics, step=state.step)
-
-
-def shuffle_data(rng: ArrayLike, inputs: ArrayLike, labels: ArrayLike) -> Tuple[ArrayLike, ArrayLike]:
-    """Shuffle the data."""
-    idx = jnp.arange(len(inputs))
-    idx = random.permutation(rng, idx)
-    return inputs[idx], labels[idx]
-
-
-def data_iterator(
-        inputs: ArrayLike, 
-        labels: ArrayLike, 
-        batchsize: int = 1048, 
-        skip_last: bool = False
-        ) -> Iterator[Tuple[ArrayLike, ArrayLike]]:
-    """Iterate over the data in batches."""
-    for i in range(0, len(inputs), batchsize):
-        if skip_last and i + batchsize > len(inputs):
-            break
-        yield dict(input=inputs[i:i + batchsize], 
-                   label=labels[i:i + batchsize])
 
 
 if __name__ == "__main__":
@@ -226,7 +95,7 @@ if __name__ == "__main__":
     all_inputs = np.stack(all_inputs, axis=0)
 
     if FILTER:
-        all_inputs, labels = filter_data(all_inputs, labels)
+        all_inputs, labels = preprocessing.filter_data(all_inputs, labels)
     else:
         all_inputs, labels = np.array(all_inputs), np.array(labels)  # TODO do this in dataloader instead
     train_inputs, train_labels, val_inputs, val_labels = split_data(
@@ -296,7 +165,7 @@ if __name__ == "__main__":
     rng, subkey = random.split(rng)
     state = updater.init_params(subkey, {
         "input": train_inputs[:2],
-        "label": train_labels[:2]
+        "target": train_labels[:2]
         })
 
     print("Number of parameters:",
@@ -307,7 +176,7 @@ if __name__ == "__main__":
         rng, subkey = random.split(rng)
 
         # Prepare data
-        inputs, labels = shuffle_data(subkey, train_inputs, train_labels)
+        inputs, labels = shuffle_arrays(subkey, train_inputs, train_labels)
         batches = data_iterator(
             inputs, labels, batchsize=BATCH_SIZE, skip_last=True)
         val_batches = data_iterator(

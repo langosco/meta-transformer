@@ -85,10 +85,10 @@ def get_param_dict(model: torch.nn.Module) -> dict:
 
 def load_pytorch_nets(n: int, data_dir: str):
     prefix = 'clean' if 'clean' in data_dir else 'poison'
-    pt_model = CNN_small_no_drop()
     nets = []
     count = 0
     for i in range(10000):
+        pt_model = CNN_small_no_drop()
         try:
             stri = str(i)
             stri = "0" * (4 - len(stri)) + stri

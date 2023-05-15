@@ -17,39 +17,12 @@ import nninn
 import os
 import argparse
 from dataclasses import asdict
+from meta_transformer.train import Updater, Logger
+from meta_transformer.data import data_iterator, shuffle_arrays, split_data
 
 
 VAL_DATA_RATIO = 0.1
-
-
-def flatten(x):
-    return jax.flatten_util.ravel_pytree(x)[0]
-
-
-# TODO replace all this with huggingface datasets
-def split_data(data: list, targets: list):
-    split_index = int(len(data)*(1-VAL_DATA_RATIO))
-    return (data[:split_index], targets[:split_index], 
-            data[split_index:], targets[split_index:])
-
-
-def is_fine(params: dict):
-    """Return false if std or mean is too high."""
-    flat = flatten(params)
-    if flat.std() > 5.0 or jnp.abs(flat.mean()) > 5.0:
-        return False
-    else:
-        return True
-
-
-def filter_data(data: List[dict], targets: List[ArrayLike]):
-    """Given a list of net params, filter out those
-    with very large means or stds."""
-    assert len(data) == len(targets)
-    f_data, f_targets = zip(*[(x, y) for x, y in zip(data, targets) if is_fine(x)])
-    print(f"Filtered out {len(data) - len(f_data)} nets.\
-          That's {100*(len(data) - len(f_data))/len(data):.2f}%.")
-    return np.array(f_data), np.array(f_targets)
+DATA_STD = 0.0582
 
 
 def acc_from_outputs(outputs, targets):
@@ -67,99 +40,8 @@ def create_loss_fn(model_forward: callable):
         """data is a dict with keys 'input' and 'target'."""
         outputs = model_forward(params, rng, data["input"], is_training)
         loss = loss_from_outputs(outputs, data["target"])
-        return loss
+        return loss, {}
     return loss_fn
-
-
-# Optimizer and update function
-@chex.dataclass
-class TrainState:
-    step: int
-    rng: random.PRNGKey
-    opt_state: optax.OptState
-    params: dict
-
-
-@chex.dataclass(frozen=True)  # needs to be immutable to be hashable (for static_argnums)
-class Updater: # Could also make this a function of loss_fn, model.apply, etc if we want to be flexible
-    """Holds training methods. All methods are jittable."""
-    opt: optax.GradientTransformation
-    model: hk.TransformedWithState
-    loss_fn: callable
-
-    def get_loss(self, rng, params, data):
-        """Compute acc and loss on test set."""
-        loss = self.loss_fn(params, rng, data, is_training=False)
-        return {"val/loss": loss}
-
-    @functools.partial(jit, static_argnums=0)
-    def init_params(self, rng: ArrayLike, data: dict) -> dict:
-        """Initializes state of the updater."""
-        out_rng, subkey = jax.random.split(rng)
-        params = self.model.init(subkey, data["input"])
-        opt_state = self.opt.init(params)
-        return TrainState(
-            step=0,
-            rng=out_rng,
-            opt_state=opt_state,
-            params=params,
-        )
-    
-    @functools.partial(jit, static_argnums=0)
-    def update(self, state: TrainState, data: dict) -> Tuple[TrainState, dict]:
-        state.rng, subkey = jax.random.split(state.rng)
-        loss, grads = value_and_grad(self.loss_fn)(
-                state.params, subkey, data)
-        updates, state.opt_state = self.opt.update(
-            grads, state.opt_state, state.params)
-        state.params = optax.apply_updates(state.params, updates)
-        metrics = {
-                "train/loss": loss,
-                "step": state.step,
-        }
-        state.step += 1
-        return state, metrics
-
-    @functools.partial(jit, static_argnums=0)
-    def compute_val_metrics(self, 
-                            state: TrainState, 
-                            data: dict) -> Tuple[TrainState, dict]:
-        state.rng, subkey = random.split(state.rng)
-        return state, self.get_loss(subkey, state.params, data)
-
-
-@chex.dataclass
-class Logger:
-    log_interval: int = 50
-    disable_wandb: bool = False
-
-    def log(self,
-            state: TrainState,
-            train_metrics: dict = None,
-            val_metrics: dict = None):
-        metrics = train_metrics or {}
-        if val_metrics is not None:
-            metrics.update(val_metrics)
-        metrics = {k: v.item() if isinstance(v, jnp.ndarray) else v
-                   for k, v in metrics.items()}
-        if state.step % self.log_interval == 0 or val_metrics is not None:
-            print(", ".join([f"{k}: {round(v, 3)}" for k, v in metrics.items()]))
-            if not self.disable_wandb:
-                wandb.log(metrics, step=state.step)
-
-
-def data_iterator(
-        inputs: ArrayLike, 
-        targets: ArrayLike, 
-        batchsize: int = 1024, 
-        skip_last: bool = False
-        ) -> Iterator[Tuple[ArrayLike, ArrayLike]]:
-    """Iterate over the data in batches."""
-    for i in range(0, len(inputs), batchsize):
-        if skip_last and i + batchsize > len(inputs):
-            break
-        yield dict(input=inputs[i:i + batchsize], 
-                   target=targets[i:i + batchsize])
 
 
 def load_and_process_nets(name: str, n: int):
@@ -180,7 +62,7 @@ def load_and_process_nets(name: str, n: int):
     if n == 10000:
         np.save(path_to_processed, inputs)
 
-    return inputs
+    return inputs / DATA_STD
 
 
 if __name__ == "__main__":
@@ -206,7 +88,7 @@ if __name__ == "__main__":
     LOG_INTERVAL = 5
     DATA_DIR = os.path.join(module_path, 'data/david_backdoors/cifar10')
 
-    NOTES = "Testing"
+    NOTES = "Fixed the terrible bug, I think"
     TAGS = ["test"]
 
     # Load model checkpoints
@@ -215,9 +97,9 @@ if __name__ == "__main__":
     targets = load_and_process_nets(name="clean", n=args.ndata)
 
     if FILTER:
-        inputs, targets = filter_data(inputs, targets)
-    train_inputs, train_targets, val_inputs, val_targets = split_data(
-        inputs, targets)
+        inputs, targets = preprocessing.filter_data(inputs, targets)
+    (train_inputs, train_targets, 
+        val_inputs, val_targets) = split_data(inputs, targets)
     print("Done.")
 
 
@@ -278,7 +160,8 @@ if __name__ == "__main__":
         rng, subkey = random.split(rng)
 
         # Prepare data
-        #shuff_inputs, shuff_targets = shuffle_data(subkey, train_inputs, train_targets)
+        # too expensive to shuffle in memory
+        # shuff_inputs, shuff_targets = shuffle_data(subkey, train_inputs, train_targets)
 
         # shuffle separately, should not work!!!
 #        np_rng.shuffle(train_inputs)

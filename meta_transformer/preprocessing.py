@@ -6,7 +6,7 @@ import jax.numpy as jnp
 from meta_transformer.transformer import Transformer
 from meta_transformer import utils
 from jax.typing import ArrayLike
-from typing import Dict, Sequence, Tuple, Callable
+from typing import Dict, Sequence, Tuple, Callable, List
 import functools
 import chex
 import numpy as np
@@ -98,6 +98,34 @@ def get_unpreprocess(
         print()
     return unpreprocess
 
+
+# Check for high variance or mean of params
+def flatten(x):
+    return jax.flatten_util.ravel_pytree(x)[0]
+
+
+def is_fine(params: dict):
+    """Return false if std or mean is too high."""
+    flat = flatten(params)
+    if flat.std() > 5.0 or jnp.abs(flat.mean()) > 5.0:
+        return False
+    else:
+        return True
+
+
+# TODO untested!
+def filter_data(*arrays):
+    """Given a list of net arrays, filter out those
+    with very large means or stds."""
+    chex.assert_equal_shape_prefix(arrays, 1)  # equal len
+
+    def all_fine(elements):
+        return all([is_fine(x) for x in elements])
+
+    arrays_filtered = zip(*[x for x in zip(*arrays) if all_fine(x)])
+    num_filtered = len(arrays[0]) - len(arrays_filtered[0])
+    print(f"Filtered out {num_filtered} nets.")
+    return arrays_filtered
 
 
 
