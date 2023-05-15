@@ -14,12 +14,30 @@ import haiku as hk
 import jax
 import jax.numpy as jnp
 import numpy as np
+import chex
 
 
 def layer_norm(x: jax.Array) -> jax.Array:
   """Applies a unique LayerNorm to x with default settings."""
   ln = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)
   return ln(x)
+
+
+@chex.dataclass
+class TransformerConfig:
+    """Hyperparameters for the model."""
+    num_heads: int = 4
+    num_layers: int = 2
+    dropout_rate: float = 0.1
+    model_size: int = 128
+
+    def __post_init__(self):
+        self.key_size = self.model_size // self.num_heads
+        if self.model_size % self.num_heads != 0:
+            raise ValueError(
+                f"model_size ({self.model_size}) must be "
+                "divisible by num_heads ({self.num_heads})")
+
 
 
 @dataclasses.dataclass

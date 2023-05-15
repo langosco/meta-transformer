@@ -7,7 +7,7 @@ import optax
 import chex
 import functools
 from typing import Mapping, Any, Tuple, List, Iterator, Optional
-from meta_transformer import utils, vit, transformer
+from meta_transformer import image_utils, utils, vit, transformer
 import matplotlib.pyplot as plt
 import wandb
 
@@ -22,7 +22,7 @@ DROPOUT_RATE = 0.1
 # Model
 def forward(image_batch, is_training=True):
     rng = hk.next_rng_key()
-    image_batch = utils.process_batch(
+    image_batch = image_utils.process_batch(
         rng, 
         image_batch, 
         augment=AUGMENT if is_training else False,
@@ -197,7 +197,7 @@ if __name__ == "__main__":
     print()
 
     # Data
-    train_images, train_labels, test_images, test_labels = utils.load_data("cifar10")
+    train_images, train_labels, test_images, test_labels = image_utils.load_data("cifar10")
     test_data = {"img": test_images, "label": test_labels}
 
     # Initialization
