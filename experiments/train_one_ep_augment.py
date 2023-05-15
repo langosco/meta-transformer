@@ -2,14 +2,15 @@ import jax
 from jax import random
 import jax.numpy as jnp
 import numpy as np
+import haiku as hk
 import optax
-from typing import Mapping, Any, Tuple, List, Iterator, Optional, Dict
+from typing import Tuple, List, Iterator
 from jax.typing import ArrayLike
 
-from meta_transformer import utils, meta_model, MetaModelClassifier, Transformer
+from meta_transformer import utils, MetaModelClassifier, Transformer
 
 from model_zoo_jax.zoo_dataloader import load_nets, shuffle_data
-from model_zoo_jax.losses import CrossEntropyLoss
+from model_zoo_jax.losses import CrossEntropyLoss, MSELoss
 from model_zoo_jax.logger import Logger
 from model_zoo_jax.train import Updater
 
@@ -17,35 +18,30 @@ from augmentations.permutation_augmentation import permute_checkpoint
 
 import os
 import argparse
-
-def flatten_net(net):
-    mylist = jax.tree_util.tree_flatten(net)[0]
-    net = [item.flatten() for sublist in mylist for item in sublist]
-    net = jnp.concatenate(net)
-    return net
-
-def get_embeddings(nets,layer=-2):
-    embs = []
-    for net in nets:
-        keys = list(net.keys())
-        w = (net[keys[layer]]['w'])
-        embs.append(jnp.ravel(w))
-    return jnp.array(embs)
-
+import numpy as np
 def augment(rng,data, labels,num_p=4):
     data_new = []
     labels_new = []
     i=0
     for datapoint,label in zip(data,labels):
-        #print(datapoint)
         rng,subkey = jax.random.split(rng)
-        permuted = permute_checkpoint(subkey,datapoint,num_permutations=num_p)
+        permuted = permute_checkpoint(subkey,datapoint,num_permutations=num_p,
+                                      permute_layers=["cnn/conv2_d","cnn/conv2_d_1","cnn/conv2_d_2", "cnn/linear"])
         data_new = data_new + permuted
         labels_new = labels_new + [label for i in range(num_p+1)]
         if i%100==0:
             print('Augmented: {}/{}'.format(i,len(labels)))
         i = i+1
     return data_new,jnp.array(labels_new)
+    
+
+def get_embeddings(nets,layer=-2):
+    embs = []
+    for net in nets:
+        keys = list(net.keys())
+        w = (net[keys[layer]]['w'])
+        embs.append({'layer':net[keys[-2]]})
+    return embs
 
 # TODO replace all this with huggingface datasets
 def split_data(data: list, labels: list):
@@ -79,8 +75,8 @@ def data_iterator(inputs: jnp.ndarray, labels: jnp.ndarray, batchsize: int = 104
     for i in range(0, len(inputs), batchsize):
         if skip_last and i + batchsize > len(inputs):
             break
-        yield dict(input=jnp.array(inputs[i:i + batchsize]), 
-                   label=jnp.array(labels[i:i + batchsize]))
+        yield dict(input=inputs[i:i + batchsize], 
+                   label=labels[i:i + batchsize])
 
 
 if __name__ == "__main__":
@@ -92,85 +88,85 @@ if __name__ == "__main__":
     parser.add_argument('--bs', type=int, help='Batch size', default=32)
     parser.add_argument('--epochs', type=int, help='Number of epochs', default=25)
     # meta-model
+    parser.add_argument('--model_size',type=int,help='MetaModelClassifier model_size parameter',default=4*32)
     parser.add_argument('--num_classes',type=int,help='Number of classes for this downstream task',default=10)
     # data
     parser.add_argument('--task', type=str, help='Task to train on.', default="class_dropped")
     parser.add_argument('--data_dir',type=str,default='model_zoo_jax/checkpoints/cifar10_lenet5_fixed_zoo')
     parser.add_argument('--num_checkpoints',type=int,default=4)
     parser.add_argument('--num_networks',type=int,default=None)
-    parser.add_argument('--augment', action='store_true', help='Use permutation augmentation')
-    parser.add_argument('--num_augment',type=int,default=2)
+    # augmentations
     parser.add_argument('--get_one_layer_embs', action='store_true', help='Get only w from second to last layer')
     parser.add_argument('--which_layer',type=int,default=-2)
+    parser.add_argument('--augment', action='store_true', help='Use permutation augmentation')
+    parser.add_argument('--num_augment',type=int,default=5)
     #logging
     parser.add_argument('--use_wandb', action='store_true', help='Use wandb')
-    parser.add_argument('--wandb_log_name',type=str,default='meta-transformer')
-    parser.add_argument('--log_interval',default=5)
-    parser.add_argument('--seed', type=int,help='PRNG key seed',default=42)
+    parser.add_argument('--wandb_log_name', type=str, default="fine-tuning-cifar10-dropped-cls")
+    parser.add_argument('--log_interval',type=int, default=50)
+    parser.add_argument('--seed',type=int, help='PRNG key seed',default=42)
     
-    parser.add_argument('--exp',type=str,default='mlp')
+    parser.add_argument('--exp',type=str,default='meta-transformer')
     args = parser.parse_args()
     
     rng = random.PRNGKey(args.seed)
 
     # Initialize meta-model
-    import haiku as hk
-    def model_fn(x, 
+    def model_fn(x: dict, 
+                dropout_rate: float = args.dropout, 
                 is_training: bool = False):
-        net = hk.Sequential([
-            hk.Flatten(),
-            hk.Linear(300), jax.nn.relu,
-            hk.Linear(100), jax.nn.relu,
-            hk.Linear(args.num_classes),
-        ])
-        return net(x)
+        num_heads = 4
+        net = MetaModelClassifier(
+            model_size=args.model_size, 
+            num_classes=args.num_classes, 
+            transformer=Transformer(
+                num_heads=num_heads,
+                num_layers=2,
+                key_size=args.model_size//num_heads,
+                dropout_rate=dropout_rate,
+            ))
+        return net(x, is_training=is_training)
     model = hk.transform(model_fn)
-    batch_apply = jax.vmap(model.apply, in_axes=(None,None,0,None), axis_name='batch')
 
     # Load model zoo checkpoints
     print(f"Loading model zoo: {args.data_dir}")
-    if args.augment:
-        inputs, all_labels = load_nets(n=args.num_networks, data_dir=os.path.join(args.data_dir), flatten=False,num_checkpoints=args.num_checkpoints)
-    elif args.get_one_layer_embs:
-        inputs, all_labels = load_nets(n=args.num_networks, data_dir=os.path.join(args.data_dir), flatten=False,num_checkpoints=args.num_checkpoints)
-        inputs = get_embeddings(inputs, layer=args.which_layer)
-        #print(inputs[0].shape)
-    else:
-        inputs, all_labels = load_nets(n=args.num_networks, data_dir=os.path.join(args.data_dir), flatten=True,num_checkpoints=args.num_checkpoints)
+    inputs, all_labels = load_nets(n=args.num_networks, 
+                                   data_dir=args.data_dir,
+                                   flatten=False,
+                                   num_checkpoints=args.num_checkpoints)
     
     print(f"Training task: {args.task}.")
     labels = all_labels[args.task]
     
     # Filter (high variance)
     filtered_inputs, filtered_labels = filter_data(inputs, labels)
+
+    if args.get_one_layer_embs:
+        filtered_inputs = get_embeddings(filtered_inputs)
     
     # Shuffle checkpoints before splitting
     rng, subkey = random.split(rng)
     filtered_inputs, filtered_labels = shuffle_data(subkey,filtered_inputs,filtered_labels,chunks=args.num_checkpoints)
     
     train_inputs, train_labels, val_inputs, val_labels = split_data(filtered_inputs, filtered_labels)
-
+    val_data = {"input": utils.tree_stack(val_inputs), "label": val_labels}
+    
+    # remember original training set len
+    one_iter_len = len(train_labels)// args.bs
+    
     if args.augment:
         rng,subkey = jax.random.split(rng)
         train_inputs, train_labels= augment(subkey,train_inputs,train_labels,num_p=args.num_augment)
         print('Number of networks after augmentation {}'.format(len(train_inputs)))
         rng, subkey = random.split(rng)
         train_inputs, train_labels = shuffle_data(subkey,train_inputs,train_labels)
-        
-        if args.get_one_layer_embs:
-            train_inputs = get_embeddings(train_inputs, layer=args.which_layer)
-            val_inputs = get_embeddings(val_inputs, layer=args.which_layer)
-            train_inputs = jnp.array(train_inputs)
-            val_inputs = jnp.array(val_inputs)
-        else:
-            train_inputs = [flatten_net(net) for net in train_inputs] 
-            val_inputs = [flatten_net(net) for net in val_inputs] 
     
+        #rng,subkey = jax.random.split(rng)
+        #val_inputs, val_labels= augment(subkey,val_inputs,val_labels)
+        #print('Number of val networks after augmentation {}'.format(len(val_inputs)))
     
-    val_data = {"input": jnp.stack(val_inputs), "label": val_labels}
 
     steps_per_epoch = len(train_inputs) // args.bs
-    
     print()
     print(f"Number of training examples: {len(train_inputs)}.")
     print("Steps per epoch:", steps_per_epoch)
@@ -178,15 +174,19 @@ if __name__ == "__main__":
     print()
 
     # Initialization
-    evaluator = CrossEntropyLoss(batch_apply, args.num_classes)
+    if args.num_classes==1:
+        evaluator = MSELoss(model.apply)
+    else:
+        evaluator = CrossEntropyLoss(model.apply, args.num_classes)
+    
     opt = optax.adamw(learning_rate=args.lr, weight_decay=args.wd)
     updater = Updater(opt=opt, evaluator=evaluator, model_init=model.init)
     
     rng, subkey = random.split(rng)
-    state = updater.init_params(subkey, train_inputs[0])
+    state = updater.init_params(subkey, x=utils.tree_stack(train_inputs[:args.bs])) #
 
     print("Number of parameters:", utils.count_params(state.params) / 1e6, "Million")
-
+    
     # logger
     logger = Logger(name = args.wandb_log_name,
                     config={
@@ -204,6 +204,7 @@ if __name__ == "__main__":
     logger.init(is_save_config=False)
 
     # Training loop
+    args.epochs=1
     for epoch in range(args.epochs):
         rng, subkey = random.split(rng)
         images, labels = shuffle_data(subkey, train_inputs, train_labels)
@@ -211,14 +212,30 @@ if __name__ == "__main__":
 
         train_all_acc = []
         train_all_loss = []
-        for batch in batches:
-
+        for it, batch in enumerate(batches):
+            batch["input"] = utils.tree_stack(batch["input"])
             state, train_metrics = updater.train_step(state, (batch['input'],batch['label']))
             logger.log(state, train_metrics)
             train_all_acc.append(train_metrics['train/acc'].item())
             train_all_loss.append(train_metrics['train/loss'].item())
-        train_metrics = {'train/acc':np.mean(train_all_acc), 'train/loss':np.mean(train_all_loss)}
             
-        # Validate every epoch
-        state, val_metrics = updater.val_step(state, (val_data['input'],val_data['label']))
-        logger.log(state, train_metrics, val_metrics)
+            if it % one_iter_len ==0:
+                train_metrics = {'train/acc':np.mean(train_all_acc), 'train/loss':np.mean(train_all_loss)}
+                it = 0
+                train_all_acc = []
+                train_all_loss = []
+                
+                # Validate every iter
+                images_val, labels_val = shuffle_data(subkey, val_inputs, val_labels)
+                batches_val = data_iterator(images_val, labels_val, batchsize=200, skip_last=True)
+                val_all_acc = []
+                val_all_loss = []
+                for it, batch_val in enumerate(batches_val):
+                    batch_val["input"] = utils.tree_stack(batch_val["input"])
+                    state, val_metrics = updater.val_step(state, (batch_val['input'],batch_val['label']))
+                    #logger.log(state, val_metrics)
+                    val_all_acc.append(val_metrics['val/acc'].item())
+                    val_all_loss.append(val_metrics['val/loss'].item())
+                val_metrics = {'val/acc':np.mean(val_all_acc), 'val/loss':np.mean(val_all_loss)}
+            
+                logger.log(state, train_metrics, val_metrics)

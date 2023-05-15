@@ -94,9 +94,11 @@ if __name__ == "__main__":
     parser.add_argument('--data_dir',type=str,default='model_zoo_jax/checkpoints/cifar10_lenet5_fixed_zoo')
     parser.add_argument('--num_checkpoints',type=int,default=4)
     parser.add_argument('--num_networks',type=int,default=None)
+    # augmentations
     parser.add_argument('--get_one_layer_embs', action='store_true', help='Get only w from second to last layer')
-    parser.add_argument('--augment', action='store_true', help='Use permutation augmentation')
     parser.add_argument('--which_layer',type=int,default=-2)
+    parser.add_argument('--augment', action='store_true', help='Use permutation augmentation')
+    parser.add_argument('--num_augment',type=int,default=3)
     #logging
     parser.add_argument('--use_wandb', action='store_true', help='Use wandb')
     parser.add_argument('--wandb_log_name', type=str, default="fine-tuning-cifar10-dropped-cls")
@@ -110,13 +112,14 @@ if __name__ == "__main__":
     def model_fn(x: dict, 
                 dropout_rate: float = args.dropout, 
                 is_training: bool = False):
+        num_heads = 4
         net = MetaModelClassifier(
             model_size=args.model_size, 
             num_classes=args.num_classes, 
             transformer=Transformer(
-                num_heads=4,
+                num_heads=num_heads,
                 num_layers=2,
-                key_size=64,
+                key_size=args.model_size//num_heads,
                 dropout_rate=dropout_rate,
             ))
         return net(x, is_training=is_training)
@@ -145,9 +148,12 @@ if __name__ == "__main__":
     train_inputs, train_labels, val_inputs, val_labels = split_data(filtered_inputs, filtered_labels)
     val_data = {"input": utils.tree_stack(val_inputs), "label": val_labels}
     
+    # remember original training set len
+    one_iter_len = len(train_labels)
+    
     if args.augment:
         rng,subkey = jax.random.split(rng)
-        train_inputs, train_labels= augment(subkey,train_inputs,train_labels)
+        train_inputs, train_labels= augment(subkey,train_inputs,train_labels,num_p=args.num_augment)
         print('Number of networks after augmentation {}'.format(len(train_inputs)))
         rng, subkey = random.split(rng)
         train_inputs, train_labels = shuffle_data(subkey,train_inputs,train_labels)
@@ -202,11 +208,8 @@ if __name__ == "__main__":
 
         train_all_acc = []
         train_all_loss = []
-        for batch in batches:
+        for it, batch in enumerate(batches):
             batch["input"] = utils.tree_stack(batch["input"])
-            #print(batch['input'])
-            #print(batch['input']['cnn/conv2_d_1']['b'])
-            #print(batch['input']['cnn/conv2_d_1']['b'].shape)
             state, train_metrics = updater.train_step(state, (batch['input'],batch['label']))
             logger.log(state, train_metrics)
             train_all_acc.append(train_metrics['train/acc'].item())
@@ -218,7 +221,7 @@ if __name__ == "__main__":
         batches = data_iterator(images, labels, batchsize=200, skip_last=True)
         val_all_acc = []
         val_all_loss = []
-        for batch in batches:
+        for it, batch in enumerate(batches):
             batch["input"] = utils.tree_stack(batch["input"])
             state, val_metrics = updater.val_step(state, (batch['input'],batch['label']))
             #logger.log(state, val_metrics)
