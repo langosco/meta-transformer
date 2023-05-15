@@ -32,7 +32,7 @@ def get_embeddings(nets,layer=-2):
         embs.append(jnp.ravel(w))
     return jnp.array(embs)
 
-def augment(rng,data, labels,num_p=2):
+def augment(rng,data, labels,num_p=4):
     data_new = []
     labels_new = []
     i=0
@@ -106,6 +106,8 @@ if __name__ == "__main__":
     parser.add_argument('--wandb_log_name',type=str,default='meta-transformer')
     parser.add_argument('--log_interval',default=5)
     parser.add_argument('--seed', type=int,help='PRNG key seed',default=42)
+    
+    parser.add_argument('--exp',type=str,default='mlp')
     args = parser.parse_args()
     
     rng = random.PRNGKey(args.seed)
@@ -131,7 +133,7 @@ if __name__ == "__main__":
     elif args.get_one_layer_embs:
         inputs, all_labels = load_nets(n=args.num_networks, data_dir=os.path.join(args.data_dir), flatten=False,num_checkpoints=args.num_checkpoints)
         inputs = get_embeddings(inputs, layer=args.which_layer)
-        print(inputs[0])
+        print(inputs[0].shape)
     else:
         inputs, all_labels = load_nets(n=args.num_networks, data_dir=os.path.join(args.data_dir), flatten=True,num_checkpoints=args.num_checkpoints)
     
@@ -187,6 +189,7 @@ if __name__ == "__main__":
     # logger
     logger = Logger(name = args.wandb_log_name,
                     config={
+                    "exp": args.exp,
                     "dataset": os.path.basename(args.data_dir),
                     "lr": args.lr,
                     "weight_decay": args.wd,

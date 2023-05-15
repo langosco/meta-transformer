@@ -181,6 +181,7 @@ if __name__ == "__main__":
     # logger
     logger = Logger(name = args.wandb_log_name,
                     config={
+                    "exp": "meta-transformer",
                     "dataset": os.path.basename(args.data_dir),
                     "lr": args.lr,
                     "weight_decay": args.wd,
