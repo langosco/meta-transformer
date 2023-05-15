@@ -35,10 +35,11 @@ def filter_layers(
 
     output_layers = {}
     removed_layers = {}
+    approved_layers = ['conv', 'linear', 'HEAD', 'MLP']
     for k, v in params.items():
         if skip_layer(k):
             removed_layers[k] = v
-        elif 'conv' or 'linear' in k:
+        elif any([l in k for l in approved_layers]):
             output_layers[k] = v
         else:
             raise ValueError(f"Invalid layer: {k}.")
