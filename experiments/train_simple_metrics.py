@@ -16,11 +16,11 @@ from model_zoo_jax.train import Updater
 import os
 import argparse
 
-def get_embeddings(nets):
+def get_embeddings(nets,layer=-2):
     embs = []
     for net in nets:
         keys = list(net.keys())
-        w = (net[keys[-2]]['w'])
+        w = (net[keys[layer]]['w'])
         embs.append(jnp.ravel(w))
     return jnp.array(embs)
 
@@ -56,7 +56,7 @@ if __name__ == "__main__":
     parser.add_argument('--task', type=str, help='Task to train on.', default="class_dropped")
     parser.add_argument('--data_dir',type=str,default='model_zoo_jax/checkpoints/cifar10_lenet5_fixed_zoo')
     parser.add_argument('--num_networks',type=int,default=None)
-    parser.add_argument('--num_checkpoints',type=int,default=4)
+    parser.add_argument('--num_checkpoints',type=int,default=1)
     #logging
     parser.add_argument('--use_wandb', action='store_true', help='Use wandb')
     parser.add_argument('--wandb_log_name',type=str,default='meta-transformer')

@@ -18,22 +18,27 @@ from augmentations.permutation_augmentation import permute_checkpoint
 
 import os
 import argparse
-
-def augment(rng,data, labels,np=10):
+import numpy as np
+def augment(rng,data, labels,num_p=4):
     data_new = []
     labels_new = []
+    i=0
     for datapoint,label in zip(data,labels):
         rng,subkey = jax.random.split(rng)
-        data_new = data_new + permute_checkpoint(subkey,datapoint,num_permutations=np)
-        labels_new = labels_new + [label for i in range(np)]
+        permuted = permute_checkpoint(subkey,datapoint,num_permutations=num_p)
+        data_new = data_new + permuted
+        labels_new = labels_new + [label for i in range(num_p+1)]
+        if i%100==0:
+            print('Augmented: {}/{}'.format(i,len(labels)))
+        i = i+1
     return data_new,jnp.array(labels_new)
     
 
-def get_embeddings(nets):
+def get_embeddings(nets,layer=-2):
     embs = []
     for net in nets:
         keys = list(net.keys())
-        w = (net[keys[-2]]['w'])
+        w = (net[keys[layer]]['w'])
         embs.append({'layer':net[keys[-2]]})
     return embs
 
@@ -91,16 +96,15 @@ if __name__ == "__main__":
     parser.add_argument('--num_networks',type=int,default=None)
     parser.add_argument('--get_one_layer_embs', action='store_true', help='Get only w from second to last layer')
     parser.add_argument('--augment', action='store_true', help='Use permutation augmentation')
+    parser.add_argument('--which_layer',type=int,default=-2)
     #logging
     parser.add_argument('--use_wandb', action='store_true', help='Use wandb')
     parser.add_argument('--wandb_log_name', type=str, default="fine-tuning-cifar10-dropped-cls")
     parser.add_argument('--log_interval',type=int, default=50)
-    parser.add_argument('--seed', help='PRNG key seed',default=42)
+    parser.add_argument('--seed',type=int, help='PRNG key seed',default=42)
     args = parser.parse_args()
     
     rng = random.PRNGKey(args.seed)
-    
-    #args.use_wandb = True
 
     # Initialize meta-model
     def model_fn(x: dict, 
@@ -112,7 +116,7 @@ if __name__ == "__main__":
             transformer=Transformer(
                 num_heads=4,
                 num_layers=2,
-                key_size=32,
+                key_size=64,
                 dropout_rate=dropout_rate,
             ))
         return net(x, is_training=is_training)
@@ -121,7 +125,7 @@ if __name__ == "__main__":
     # Load model zoo checkpoints
     print(f"Loading model zoo: {args.data_dir}")
     inputs, all_labels = load_nets(n=args.num_networks, 
-                                   data_dir=os.path.join(args.data_dir),
+                                   data_dir=args.data_dir,
                                    flatten=False,
                                    num_checkpoints=args.num_checkpoints)
     
@@ -145,6 +149,12 @@ if __name__ == "__main__":
         rng,subkey = jax.random.split(rng)
         train_inputs, train_labels= augment(subkey,train_inputs,train_labels)
         print('Number of networks after augmentation {}'.format(len(train_inputs)))
+        rng, subkey = random.split(rng)
+        train_inputs, train_labels = shuffle_data(subkey,train_inputs,train_labels)
+    
+        #rng,subkey = jax.random.split(rng)
+        #val_inputs, val_labels= augment(subkey,val_inputs,val_labels)
+        #print('Number of val networks after augmentation {}'.format(len(val_inputs)))
     
 
     steps_per_epoch = len(train_inputs) // args.bs
@@ -193,6 +203,9 @@ if __name__ == "__main__":
         train_all_loss = []
         for batch in batches:
             batch["input"] = utils.tree_stack(batch["input"])
+            #print(batch['input'])
+            #print(batch['input']['cnn/conv2_d_1']['b'])
+            #print(batch['input']['cnn/conv2_d_1']['b'].shape)
             state, train_metrics = updater.train_step(state, (batch['input'],batch['label']))
             logger.log(state, train_metrics)
             train_all_acc.append(train_metrics['train/acc'].item())
@@ -200,5 +213,16 @@ if __name__ == "__main__":
         train_metrics = {'train/acc':np.mean(train_all_acc), 'train/loss':np.mean(train_all_loss)}
             
         # Validate every epoch
-        state, val_metrics = updater.val_step(state, (val_data['input'],val_data['label']))
+        images, labels = shuffle_data(subkey, val_inputs, val_labels)
+        batches = data_iterator(images, labels, batchsize=200, skip_last=True)
+        val_all_acc = []
+        val_all_loss = []
+        for batch in batches:
+            batch["input"] = utils.tree_stack(batch["input"])
+            state, val_metrics = updater.val_step(state, (batch['input'],batch['label']))
+            #logger.log(state, val_metrics)
+            val_all_acc.append(val_metrics['val/acc'].item())
+            val_all_loss.append(val_metrics['val/loss'].item())
+        val_metrics = {'val/acc':np.mean(val_all_acc), 'val/loss':np.mean(val_all_loss)}
+            
         logger.log(state, train_metrics, val_metrics)
