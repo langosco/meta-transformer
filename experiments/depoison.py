@@ -4,21 +4,17 @@ import jax.numpy as jnp
 import numpy as np
 import haiku as hk
 import optax
-import chex
-import functools
 from typing import Mapping, Any, Tuple, List, Iterator, Optional, Dict
 from jax.typing import ArrayLike
 from meta_transformer import utils, preprocessing, torch_utils, module_path
 from meta_transformer.meta_model import create_meta_model
 from meta_transformer.meta_model import MetaModelConfig as ModelConfig
 import wandb
-from nninn.repl.utils import load_nets, classes_per_task
-import nninn
 import os
 import argparse
 from dataclasses import asdict
 from meta_transformer.train import Updater, Logger
-from meta_transformer.data import data_iterator, shuffle_arrays, split_data
+from meta_transformer.data import data_iterator, split_data
 
 
 VAL_DATA_RATIO = 0.1
@@ -108,7 +104,7 @@ if __name__ == "__main__":
         model_size=D_MODEL,
         num_heads=8,
         num_layers=12,
-        dropout_rate=0.0,
+        dropout_rate=0.1,
         use_embedding=True,
     )
 
@@ -165,9 +161,9 @@ if __name__ == "__main__":
         # shuff_inputs, shuff_targets = shuffle_data(subkey, train_inputs, train_targets)
 
         # shuffle separately, should not work!!!
-#        np_rng.shuffle(train_inputs)
 #        np_rng.shuffle(train_targets)
 
+        # TODO move out of loop if we don't shuffle
         train_batches = data_iterator(
             train_inputs, train_targets, batchsize=args.bs, skip_last=True)
         val_batches = data_iterator(
