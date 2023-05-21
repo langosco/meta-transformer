@@ -12,17 +12,71 @@ import time
 from typing import List
 from functools import partial
 
+def permute_batch(rng, checkpoints,
+                  permute_layers:List[str]=["cnn/conv2_d_1", "cnn/linear"],
+                  permutation_mode: str = "random",
+                  num_permutations: int = 50,
+                  keep_original:bool=True,
+                  models_same: bool=True):
+    """
+    Augment a batch of model parameter pytrees, by permuting layers specified in permute_layers list
+    
+    Arguments:
+        checkpoints (list):     list of jax pytrees - a batch to permute
+        permute_layers (list):  which layers to permute, default: ["cnn/conv2_d_1", "cnn/linear"]
+        permutation_mode (str): "random" or "complete" - weather to choose random permutations 
+                                to perform or to perform all possible permutations, default: "random"
+        num_permutations (int): how many random permutations to perform, ignored if permutation_mode="complete",
+                                default=50
+        keep_original (bool):   weather to keep original checkpoint as the first element of the output list (True) 
+                                or to ommit it (False), defautl: True
+        models_same (bool):     if all models in the batch have the same layers to be permuted
+    Returns:
+        list model checkpoints (as jax pytrees) with permuted weights 
+    """
+    
+    batch_size = len(checkpoints)
+    if num_permutations is None:
+        permutation_mode = 'complete'
+    if models_same:
+        permutation_list, rng = __get_permutations_per_layer(rng, checkpoints[0], permute_layers, 
+                                                        permutation_mode=permutation_mode,
+                                                        num_permute = num_permutations*batch_size)
+        permutation_list, rng = __get_permutation_combinations(rng, permutation_list,
+                                                        permutation_mode=permutation_mode,
+                                                        num_permute = num_permutations*batch_size)
+    else:
+        raise NotImplementedError("Batches of different models cannot yet be permuted as a batch")
+    
+    checkpoint_list = []
+    repeated_list = [checkpoint for _ in range(num_permutations) for checkpoint in checkpoints]
+    checkpoint_list = perform_batch_permutation(repeated_list, permutation_list)
+    if keep_original:
+        for i in range(len(checkpoints)):
+            checkpoint_list.insert(i*num_permutations+i, checkpoints[i]) 
+    return checkpoint_list
+
 def permute_checkpoint(rng, checkpoint, 
                        permute_layers:List[str]=["cnn/conv2_d_1", "cnn/linear"],
                        permutation_mode: str = "random",
-                       num_permutations: int = 50):
+                       num_permutations: int = 50,
+                       keep_original:bool=True):
     """
+    Augment one model parameter pytree, by permuting layers specified in permute_layers list
+    
     Arguments:
-        checkpoint: jax pytree - model to permute the layers to
-        permute_layers: which layers to permute
+        checkpoint (dict):      jax pytree - which model parameters to permute
+        permute_layers (list):  which layers to permute, default: ["cnn/conv2_d_1", "cnn/linear"]
+        permutation_mode (str): "random" or "complete" - weather to choose random permutations 
+                                to perform or to perform all possible permutations, default: "random"
+        num_permutations (int): how many random permutations to perform, ignored if permutation_mode="complete",
+                                default=50
+        keep_original (bool):   weather to keep original checkpoint as the first element of the output list (True) 
+                                or to ommit it (False), defautl: True
     Returns:
-        model checkpoint with permuted weights 
+        list model checkpoints (as jax pytrees) with permuted weights 
     """
+    
     if num_permutations is None:
         permutation_mode = 'complete'
     permutation_list, rng = __get_permutations_per_layer(rng, checkpoint, permute_layers, 
@@ -32,13 +86,17 @@ def permute_checkpoint(rng, checkpoint,
                                                     permutation_mode=permutation_mode,
                                                     num_permute = num_permutations)
     checkpoint_list = []
-    checkpoint_list.append(checkpoint)
+    if keep_original:
+        checkpoint_list.append(checkpoint)
     for i in range(len(permutation_list)):
         check1 = perform_single_permutation(checkpoint, permutation_list[i])
         checkpoint_list.append(check1)
     return checkpoint_list
 
 def __get_permutations_per_layer(rng, checkpoint, permute_layers, permutation_mode='random', num_permute=100):
+    """For each layer in permute_layers (named layers in checkpoint parameter dict), get a list of 
+    permuted indices. Returns a dictionary with layer names as keys and lists of permuted indices as values"""
+    
     permutations = {layer: [] for layer in permute_layers}
     
     for layer in permute_layers:
@@ -70,9 +128,13 @@ def __get_permutations_per_layer(rng, checkpoint, permute_layers, permutation_mo
     return permutations, rng      
 
 def __approximate_num_permutations(n):
+    """Approximate n!"""
     return int(round(math.sqrt(2*math.pi*n) * (n/math.e)**n))+1
 
 def __get_permutation_combinations(rng, layer_permutations, permutation_mode='random', num_permute=100):
+    """Given a list of permutations per layer, combine them into joint permutations of the whole model
+    (randomly seleced num_permute, or all of them if permutation_mode='complete')"""
+    
     if permutation_mode=='complete':
         # combine all layer permutations
         combination_list = []
@@ -99,7 +161,11 @@ def __get_permutation_combinations(rng, layer_permutations, permutation_mode='ra
     return combinations, rng
 
 def perform_single_permutation(checkpoint_in, permutations):
-    checkpoint = jax.tree_util.tree_map(lambda x: np.copy(x), checkpoint_in)
+    """Given model parameters pytree, and a single dictionary of permuted indices per layer,
+    return permuted model parameters. Works for convolutional and linear layers. Layers must be named
+    accordingly."""
+    
+    checkpoint = jax.tree_util.tree_map(lambda x: jnp.copy(x), checkpoint_in)
     
     for layer, index_new in permutations.items():
         #index_old = jnp.arange(len(index_new))
@@ -126,20 +192,37 @@ def perform_single_permutation(checkpoint_in, permutations):
                     checkpoint[next_layer]['w']=checkpoint[next_layer]['w'][index_new,:]
                 else:
                     #conv flattened and followed by linear
-                    new_weights = np.copy(checkpoint[next_layer]['w'])
+                    new_weights = jnp.copy(checkpoint[next_layer]['w'])
                     block_length = checkpoint[next_layer]['w'].shape[0] // len(index_new)
                     for idx_old, idx_new in enumerate(index_new):
-                        for fcdx in range(block_length):
-                            offset_old = idx_old * block_length + fcdx
-                            offset_new = idx_new * block_length + fcdx
-                            new_weights[offset_old,:] = checkpoint[next_layer]['w'][offset_new,:]
+                        #for fcdx in range(block_length):
+                        #    offset_old = idx_old * block_length + fcdx
+                        #    offset_new = idx_new * block_length + fcdx
+                        #    new_weights[offset_old,:] = checkpoint[next_layer]['w'][offset_new,:]
+                        offset_old = idx_old * block_length 
+                        offset_new = idx_new * block_length  
+                        #new_weights = new_weights.at[offset_old:offset_old+block_length, :].set(checkpoint[next_layer]['w'][offset_new:offset_new+block_length, :])
+                        slice_new = jax.lax.dynamic_slice(checkpoint[next_layer]['w'], (offset_new, 0), (block_length, checkpoint[next_layer]['w'].shape[1]))
+                        new_weights = jax.lax.dynamic_update_slice(new_weights, slice_new, (offset_old, 0))    
                     checkpoint[next_layer]['w'] = new_weights
             
     return checkpoint 
 
-#perform_batch_permutation = vmap(perform_single_permutation,in_axes=(None,1))       
-    
+def perform_batch_permutation(checkpoints, permutations):
+    """Perform permutations from list of permutation dicts on a list of checkpoints (each is a pytree)
+    Returns: a list of pytrees of permuted checkpoints"""
+    batch_fun = vmap(perform_single_permutation,in_axes=(0, 0),axis_name='batch')
+    stacked_checkpoints = jax.tree_util.tree_map(lambda *args: jnp.stack(args), *checkpoints)
+    stacked_permutations = jax.tree_util.tree_map(lambda *args: jnp.stack(args), *permutations)
+    batched_result = batch_fun(stacked_checkpoints, stacked_permutations)
+    unbatched_results_list = [
+        jax.tree_util.tree_map(lambda p: p[i], batched_result)
+        for i in range(len(checkpoints))
+    ]
+    return unbatched_results_list
+
 def __get_next_layer(checkpoint, layer):
+    """Return next layer name if next layer in pytree checkpoint exists."""
     found_current_layer = False
     for layer_name in dict(checkpoint).keys():
         if found_current_layer:
@@ -148,10 +231,6 @@ def __get_next_layer(checkpoint, layer):
             found_current_layer = True
     return None
 
-
-#def __set_layer_weights(layer_name, new_weights, weights):
-#    return weights.at(layer_name).set(new_weights)
-
 if __name__=='__main__':    
     from model_zoo_jax.zoo_dataloader import load_nets
     
@@ -159,23 +238,34 @@ if __name__=='__main__':
                                    data_dir='model_zoo_jax/checkpoints/mnist_smallCNN_fixed_zoo',
                                    flatten=False,
                                    num_checkpoints=1)
+    rng = random.PRNGKey(42)
     
     params = inputs[0]
     print("param count:", sum(x.size for x in jax.tree_util.tree_leaves(params)))
     print("param tree:", jax.tree_map(lambda x: x.shape, params))
     
-    rng = random.PRNGKey(42)
     permutations = permute_checkpoint(rng, params, 
                        permute_layers=["cnn/conv2_d_1","cnn/linear"], 
                        permutation_mode="random",
-                       num_permutations=4)
+                       num_permutations=3)
     
+    print('-'*50)
+    print("permute using for")
     start = time.time()
     result = []
     for i in range(len(inputs)):
         params = inputs[0]
         rng,subkey = random.split(rng)
-        result = result + permute_checkpoint(subkey,params,num_permutations=2)
+        result = result + permute_checkpoint(subkey,params,num_permutations=1,keep_original=False)
+    end = time.time()
+    print("one batch takes: {}".format(end-start))
+    print("num models: {}".format(len(result)))
+    
+    print('-'*50)
+    print('permute using batch')
+    start = time.time()
+    rng,subkey = random.split(rng)
+    result = permute_batch(subkey,inputs,num_permutations=1,keep_original=False)
     end = time.time()
     print("one batch takes: {}".format(end-start))
     print("num models: {}".format(len(result)))
