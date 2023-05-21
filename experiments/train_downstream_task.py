@@ -14,25 +14,11 @@ from model_zoo_jax.losses import CrossEntropyLoss, MSELoss
 from model_zoo_jax.logger import Logger
 from model_zoo_jax.train import Updater
 
-from augmentations.permutation_augmentation import permute_checkpoint
+from augmentations import augment_batch
 
 import os
 import argparse
 import numpy as np
-def augment(rng,data, labels,num_p=4):
-    data_new = []
-    labels_new = []
-    i=0
-    for datapoint,label in zip(data,labels):
-        rng,subkey = jax.random.split(rng)
-        permuted = permute_checkpoint(subkey,datapoint,num_permutations=num_p)
-        data_new = data_new + permuted
-        labels_new = labels_new + [label for i in range(num_p+1)]
-        if i%100==0:
-            print('Augmented: {}/{}'.format(i,len(labels)))
-        i = i+1
-    return data_new,jnp.array(labels_new)
-    
 
 def get_embeddings(nets,layer=-2):
     embs = []
@@ -76,7 +62,23 @@ def data_iterator(inputs: jnp.ndarray, labels: jnp.ndarray, batchsize: int = 104
             break
         yield dict(input=inputs[i:i + batchsize], 
                    label=labels[i:i + batchsize])
+        
+def load_multiple_datasets(dirs,args):
+    inputs_all = []
+    all_labels_all = {}
+    for dir in dirs:
+        print(f"Loading model zoo: {dir}")
+        inputs, all_labels = load_nets(n=args.num_networks, 
+                                   data_dir=dir,
+                                   flatten=False,
+                                   num_checkpoints=args.num_checkpoints)
+        inputs_all = inputs_all+inputs
+        if len(all_labels_all)==0:
+            all_labels_all = all_labels
+        else:
+            all_labels_all = {key: jnp.stack(all_labels_all[key],all_labels[key],axis=0) for key in all_labels.keys()}
 
+    return inputs_all, all_labels_all
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Training run')
@@ -104,6 +106,7 @@ if __name__ == "__main__":
     parser.add_argument('--wandb_log_name', type=str, default="fine-tuning-cifar10-dropped-cls")
     parser.add_argument('--log_interval',type=int, default=50)
     parser.add_argument('--seed',type=int, help='PRNG key seed',default=42)
+    parser.add_argument('--exp', type=str, default="meta-transformer")
     args = parser.parse_args()
     
     rng = random.PRNGKey(args.seed)
@@ -147,21 +150,6 @@ if __name__ == "__main__":
     
     train_inputs, train_labels, val_inputs, val_labels = split_data(filtered_inputs, filtered_labels)
     val_data = {"input": utils.tree_stack(val_inputs), "label": val_labels}
-    
-    # remember original training set len
-    one_iter_len = len(train_labels)
-    
-    if args.augment:
-        rng,subkey = jax.random.split(rng)
-        train_inputs, train_labels= augment(subkey,train_inputs,train_labels,num_p=args.num_augment)
-        print('Number of networks after augmentation {}'.format(len(train_inputs)))
-        rng, subkey = random.split(rng)
-        train_inputs, train_labels = shuffle_data(subkey,train_inputs,train_labels)
-    
-        #rng,subkey = jax.random.split(rng)
-        #val_inputs, val_labels= augment(subkey,val_inputs,val_labels)
-        #print('Number of val networks after augmentation {}'.format(len(val_inputs)))
-    
 
     steps_per_epoch = len(train_inputs) // args.bs
     print()
@@ -187,7 +175,7 @@ if __name__ == "__main__":
     # logger
     logger = Logger(name = args.wandb_log_name,
                     config={
-                    "exp": "meta-transformer",
+                    "exp": args.exp,
                     "dataset": os.path.basename(args.data_dir),
                     "lr": args.lr,
                     "weight_decay": args.wd,
@@ -202,8 +190,13 @@ if __name__ == "__main__":
 
     # Training loop
     for epoch in range(args.epochs):
+        rng,subkey = random.split(rng)
+        if args.augment:
+            images,labels = augment_batch(subkey,train_inputs,train_labels,num_p=args.num_augment,keep_original=False)
+        else:
+            images,labels = train_inputs,train_labels
         rng, subkey = random.split(rng)
-        images, labels = shuffle_data(subkey, train_inputs, train_labels)
+        images, labels = shuffle_data(subkey, images, labels)
         batches = data_iterator(images, labels, batchsize=args.bs, skip_last=True)
 
         train_all_acc = []
@@ -218,7 +211,7 @@ if __name__ == "__main__":
             
         # Validate every epoch
         images, labels = shuffle_data(subkey, val_inputs, val_labels)
-        batches = data_iterator(images, labels, batchsize=200, skip_last=True)
+        batches = data_iterator(images, labels, batchsize=32, skip_last=True)
         val_all_acc = []
         val_all_loss = []
         for it, batch in enumerate(batches):
