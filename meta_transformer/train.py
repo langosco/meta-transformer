@@ -84,18 +84,37 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
 class Logger:
     log_interval: int = 50
     disable_wandb: bool = False
+    store: bool = False
+
+    def __post_init__(self):
+        self.data = []
+
+    def clean(self, train_metrics, val_metrics):
+        metrics = train_metrics or {}
+
+        if val_metrics is not None:
+            metrics.update(val_metrics)
+
+        metrics = {k: v.item() if isinstance(v, jnp.ndarray) else v
+                   for k, v in metrics.items()}
+        return metrics
 
     # TODO change args, eg metrics, optional_metrics
     def log(self,
             state: TrainState,
             train_metrics: dict = None,
             val_metrics: dict = None):
-        metrics = train_metrics or {}
-        if val_metrics is not None:
-            metrics.update(val_metrics)
-        metrics = {k: v.item() if isinstance(v, jnp.ndarray) else v
-                   for k, v in metrics.items()}
+        metrics = self.clean(train_metrics, val_metrics)
         if state.step % self.log_interval == 0 or val_metrics is not None:
             print(", ".join([f"{k}: {round(v, 3)}" for k, v in metrics.items()]))
             if not self.disable_wandb:
                 wandb.log(metrics, step=state.step)
+            if self.store:
+                self.log_append(state, metrics)
+    
+    def log_append(self, 
+                   state: TrainState,
+                   metrics: dict):
+        metrics['step'] = state.step
+        self.data.append(metrics)
+

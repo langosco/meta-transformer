@@ -15,6 +15,7 @@ import argparse
 from dataclasses import asdict
 from meta_transformer.train import Updater, Logger
 from meta_transformer.data import data_iterator, split_data
+from augmentations import permute_checkpoint
 
 
 VAL_DATA_RATIO = 0.1
@@ -40,26 +41,92 @@ def create_loss_fn(model_forward: callable):
     return loss_fn
 
 
-def load_and_process_nets(name: str, n: int):
-    path_to_processed = os.path.join(
-            module_path, "data/cache/depoisoning", name)
-    os.makedirs(os.path.dirname(path_to_processed), exist_ok=True)
+#def load_and_process_nets(name: str, n: int):
+#    path_to_processed = os.path.join(
+#            module_path, "data/cache/depoisoning", name)
+#    os.makedirs(os.path.dirname(path_to_processed), exist_ok=True)
+#
+#    # TODO load and save the function as well
+#    if False: #os.path.exists(path_to_processed) and n == 10000:
+#        inputs = np.load(path_to_processed)
+#    else:
+#        inputs, get_pytorch_model = torch_utils.load_pytorch_nets(
+#            n=n, data_dir=os.path.join(DATA_DIR, name)
+#        )
+#        unpreprocess = preprocessing.get_unpreprocess(inputs[0], CHUNK_SIZE)
+#        inputs = np.stack([preprocessing.preprocess(inp, CHUNK_SIZE)[0]
+#                      for inp in inputs])
+#
+#    if False: #n == 10000:
+#        np.save(path_to_processed, inputs)
+#
+#    return inputs / DATA_STD, get_pytorch_model
 
-    # TODO load and save the function as well
-    if False: #os.path.exists(path_to_processed) and n == 10000:
-        inputs = np.load(path_to_processed)
-    else:
-        inputs, get_pytorch_model = torch_utils.load_pytorch_nets(
-            n=n, data_dir=os.path.join(DATA_DIR, name)
+
+def load_nets(name: str, n: int):
+    inputs, get_pytorch_model = torch_utils.load_pytorch_nets(
+        n=n, data_dir=os.path.join(DATA_DIR, name)
+    )
+#    inputs = np.stack([preprocessing.preprocess(inp, CHUNK_SIZE)[0]
+#                      for inp in inputs])
+    inputs = np.array(inputs)
+    return inputs#, get_pytorch_model
+
+
+LAYERS = ['Conv2d_0', 'Conv2d_1', 'Conv2d_2', 'Conv2d_3', 
+          'Conv2d_4', 'Conv2d_5', 'Linear_6', 'Linear_7'] 
+
+
+def augment_list_of_nets(nets: List[dict], seed):
+    """Augment a list of nets with random augmentations"""
+    rng = np.random.default_rng(seed)
+    augmented_nets = []
+    for net in nets:
+        augmented = permute_checkpoint(
+            rng,
+            net,
+            permute_layers=LAYERS,
+            num_permutations=2,  # 2x batch size
         )
-        unpreprocess = preprocessing.get_unpreprocess(inputs[0], CHUNK_SIZE)
-        inputs = np.stack([preprocessing.preprocess(inp, CHUNK_SIZE)[0]
-                      for inp in inputs])
+        del augmented[0]  # don't need the original
+        augmented_nets += augmented
+    return augmented_nets
 
-    if False: #n == 10000:
-        np.save(path_to_processed, inputs)
 
-    return inputs / DATA_STD, get_pytorch_model
+def process_nets(nets: List[dict], 
+                seed: int,
+                augment: bool = True,
+                 ) -> ArrayLike:
+    """Permutation augment, then flatten to arrays."""
+    nets = augment_list_of_nets(nets, seed) if augment else nets
+    nets = np.stack([preprocessing.preprocess(net, CHUNK_SIZE)[0]
+                        for net in nets])
+    return nets / DATA_STD
+
+
+def process_batch(batch: dict, seed: int, augment: bool = True) -> dict:
+    """Process a batch of nets."""
+    inputs = process_nets(batch["input"], seed, augment=augment)
+    targets = process_nets(batch["target"], seed, augment=augment)
+    return dict(input=inputs, target=targets)
+
+
+import concurrent.futures
+import jax.random as random
+
+
+class DataLoader:
+    def __init__(self, batches, seed, num_workers=4):
+        self.batches = batches
+        self.seed = seed
+        self.num_workers = num_workers
+
+    def __iter__(self):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.num_workers) as executor:
+            for batch in self.batches:
+                self.seed += 1
+                future = executor.submit(process_batch, batch, self.seed, augment=False)
+                yield future.result()
 
 
 if __name__ == "__main__":
@@ -90,11 +157,15 @@ if __name__ == "__main__":
 
     # Load model checkpoints
     print("Loading data...")
-    inputs, get_pytorch_model = load_and_process_nets(name="poison_easy", n=args.ndata)
-    targets, _ = load_and_process_nets(name="clean", n=args.ndata)
+    inputs = load_nets(name="poison_easy", n=args.ndata)
+    targets = load_nets(name="clean", n=args.ndata)
+
+#    inputs, get_pytorch_model = load_and_process_nets(name="poison_easy", n=args.ndata)
+#    targets, _ = load_and_process_nets(name="clean", n=args.ndata)
 
     if FILTER:
         inputs, targets = preprocessing.filter_data(inputs, targets)
+
     (train_inputs, train_targets, 
         val_inputs, val_targets) = split_data(inputs, targets)
     print("Done.")
@@ -125,7 +196,7 @@ if __name__ == "__main__":
         notes=NOTES,
         )  
 
-    steps_per_epoch = len(train_inputs) // args.bs
+    steps_per_epoch = len(train_inputs) // (args.bs // 2)
 
     print()
     print(f"Number of training examples: {len(train_inputs)}.")
@@ -141,10 +212,12 @@ if __name__ == "__main__":
     updater = Updater(opt=opt, model=model, loss_fn=loss_fn)
     logger = Logger(log_interval=LOG_INTERVAL)
     rng, subkey = random.split(rng)
-    state = updater.init_params(subkey, {
+    init_batch = {
         "input": train_inputs[:2],
         "target": train_targets[:2],
-        })
+    }
+    init_batch = process_batch(init_batch, 0, augment=False)
+    state = updater.init_params(subkey, init_batch)
 
     print("Number of parameters:",
            utils.count_params(state.params) / 1e6, "Million")
@@ -163,15 +236,19 @@ if __name__ == "__main__":
         # shuffle separately, should not work!!!
 #        np_rng.shuffle(train_targets)
 
-        # TODO move out of loop if we don't shuffle
         train_batches = data_iterator(
-            train_inputs, train_targets, batchsize=args.bs, skip_last=True)
+            train_inputs, train_targets, batchsize=args.bs // 2, skip_last=True)
         val_batches = data_iterator(
-            val_inputs, val_targets, batchsize=args.bs, skip_last=False)
+            val_inputs, val_targets, batchsize=args.bs // 2, skip_last=False)
+
+        train_loader = DataLoader(train_batches, 43, num_workers=4)
+
 
         # Validate every epoch
         valdata = []
         for batch in val_batches:
+            rng, subkey = random.split(rng)
+            batch = process_batch(batch, 0, augment=False)
             state, val_metrics_dict = updater.compute_val_metrics(
                 state, batch)
             val_metrics_dict.update({"epoch": epoch})
@@ -181,7 +258,9 @@ if __name__ == "__main__":
         logger.log(state, means)
 
         # Train
-        for batch in train_batches:
+        for batch in train_loader:
+            #rng, subkey = random.split(rng)
+            #batch = process_batch(batch, subkey, augment=True)
             state, train_metrics = updater.update(state, batch)
             train_metrics.update({"epoch": epoch})
             logger.log(state, train_metrics)

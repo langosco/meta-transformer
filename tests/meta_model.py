@@ -78,9 +78,8 @@ def test_embed_unembed(model_params: dict):
     @hk.without_apply_rng
     @hk.transform
     def unembed_params(embedded_params):
-        unembed = NetUnEmbedding(
-            original_param_shapes=get_param_shapes(model_params))
-        return unembed(embedded_params)
+        unembed = NetUnEmbedding(get_param_shapes(model_params))
+        return unembed(embedded_params, dummy_params=model_params)
 
 
     unbembedding_weights = unembed_params.init(jax.random.PRNGKey(42), embedded_params)

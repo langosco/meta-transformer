@@ -68,7 +68,7 @@ def create_loss_fn(model_forward: callable):
         inputs, _ = data["input"], data["label"]
         param_out = model_forward(params, rng, inputs, is_training)  # dict of param batches
         loss = loss_from_outputs(param_out, inputs)
-        return loss
+        return loss#, {}
     return loss_fn
 
 
