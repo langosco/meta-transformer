@@ -115,6 +115,10 @@ class Logger:
     def log_append(self, 
                    state: TrainState,
                    metrics: dict):
-        metrics['step'] = state.step
+        metrics['step'] = int(state.step)
         self.data.append(metrics)
+    
+    def get_data(self, metric="train/loss"):
+        """returns a tuple (steps, metric)"""
+        return zip(*[(d['step'], d[metric]) for d in self.data if metric in d])
 
