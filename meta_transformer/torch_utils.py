@@ -82,9 +82,15 @@ def load_input_and_target_weights(
             target_path = os.path.join(
                 targets_dir, target_prefix + get_postfix_from_filename(checkpoint))
             inputs.append(get_param_dict(load_model(model, input_path))[0])
+        except FileNotFoundError:
+            print(f'Could not find {target_path}.')
+            continue  # TODO is there a more elegant way to do this?
+        
+        try:
             targets.append(get_param_dict(load_model(model, target_path))[0])
         except FileNotFoundError:
             print(f'Could not find {target_path}.')
+            del inputs[-1]
     
     return np.array(inputs), np.array(targets)
 

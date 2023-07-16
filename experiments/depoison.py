@@ -41,7 +41,6 @@ def create_loss_fn(model_forward: callable):
     return loss_fn
 
 
-
 LAYERS_TO_PERMUTE = ['Conv2d_0', 'Conv2d_1', 'Conv2d_2', 'Conv2d_3', 
           'Conv2d_4', 'Conv2d_5', 'Linear_6', 'Linear_7'] 
 
@@ -125,7 +124,6 @@ if __name__ == "__main__":
 #    architecture = torch_utils.CNNMedium()  # for CIFAR-10
     architecture = torch_utils.CNNSmall()  # for MNIST
 
-#    NOTES = "Fixed the terrible bug, I think"
     NOTES = "testing"
     TAGS = ["test", "MNIST"]
 
@@ -142,7 +140,7 @@ if __name__ == "__main__":
         inputs, targets = preprocessing.filter_data(inputs, targets)
 
     (train_inputs, train_targets, 
-        val_inputs, val_targets) = split_data(inputs, targets, 0.9)
+        val_inputs, val_targets) = split_data(inputs, targets, 0.1)
     print("Done.")
 
 
@@ -167,6 +165,7 @@ if __name__ == "__main__":
             "num_epochs": args.epochs,
             "dataset": DATA_DIR,
             "model_config": asdict(model_config),
+            "num_datapoints": args.ndata,
         },
         notes=NOTES,
         )  
@@ -201,6 +200,14 @@ if __name__ == "__main__":
 
     np_rng = np.random.default_rng()
 
+    def validate_shapes(batch):
+        """Check that the shapes are correct."""
+        if not batch["input"].shape == batch["target"].shape:
+            raise ValueError("Input and target shapes do not match. "
+                             f"Received input shaped: {batch['input'].shape} "
+                             f"and target shaped: {batch['target'].shape}.")
+
+
     # Training loop
     for epoch in range(args.epochs):
         rng, subkey = random.split(rng)
@@ -226,6 +233,7 @@ if __name__ == "__main__":
             for batch in val_batches:
                 rng, subkey = random.split(rng)
                 batch = process_batch(batch, 0, augment=False)
+                validate_shapes(batch)
                 state, val_metrics_dict = updater.compute_val_metrics(
                     state, batch)
                 val_metrics_dict.update({"epoch": epoch})
@@ -236,10 +244,9 @@ if __name__ == "__main__":
 
         # Train
         for batch in train_loader:
+            validate_shapes(batch)
             #rng, subkey = random.split(rng)
             #batch = process_batch(batch, subkey, augment=True)
-#            print(batch["input"].shape)
-#            print(batch["input"][0:2, 30, 345:365])  # batch, chunk, embedding
             state, train_metrics = updater.update(state, batch)
             train_metrics.update({"epoch": epoch})
             logger.log(state, train_metrics)
