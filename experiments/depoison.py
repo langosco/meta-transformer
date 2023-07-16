@@ -16,7 +16,7 @@ from dataclasses import asdict
 from meta_transformer.train import Updater, Logger
 from meta_transformer.data import data_iterator, split_data
 from augmentations import permute_checkpoint
-
+#permute_checkpoint = lambda *args, **kwargs: [None]
 
 VAL_DATA_RATIO = 0.1
 DATA_STD = 0.0582
@@ -41,39 +41,8 @@ def create_loss_fn(model_forward: callable):
     return loss_fn
 
 
-#def load_and_process_nets(name: str, n: int):
-#    path_to_processed = os.path.join(
-#            module_path, "data/cache/depoisoning", name)
-#    os.makedirs(os.path.dirname(path_to_processed), exist_ok=True)
-#
-#    # TODO load and save the function as well
-#    if False: #os.path.exists(path_to_processed) and n == 10000:
-#        inputs = np.load(path_to_processed)
-#    else:
-#        inputs, get_pytorch_model = torch_utils.load_pytorch_nets(
-#            n=n, data_dir=os.path.join(DATA_DIR, name)
-#        )
-#        unpreprocess = preprocessing.get_unpreprocess(inputs[0], CHUNK_SIZE)
-#        inputs = np.stack([preprocessing.preprocess(inp, CHUNK_SIZE)[0]
-#                      for inp in inputs])
-#
-#    if False: #n == 10000:
-#        np.save(path_to_processed, inputs)
-#
-#    return inputs / DATA_STD, get_pytorch_model
 
-
-def load_nets(name: str, n: int):
-    inputs, get_pytorch_model = torch_utils.load_pytorch_nets(
-        n=n, data_dir=os.path.join(DATA_DIR, name)
-    )
-#    inputs = np.stack([preprocessing.preprocess(inp, CHUNK_SIZE)[0]
-#                      for inp in inputs])
-    inputs = np.array(inputs)
-    return inputs#, get_pytorch_model
-
-
-LAYERS = ['Conv2d_0', 'Conv2d_1', 'Conv2d_2', 'Conv2d_3', 
+LAYERS_TO_PERMUTE = ['Conv2d_0', 'Conv2d_1', 'Conv2d_2', 'Conv2d_3', 
           'Conv2d_4', 'Conv2d_5', 'Linear_6', 'Linear_7'] 
 
 
@@ -85,7 +54,7 @@ def augment_list_of_nets(nets: List[dict], seed):
         augmented = permute_checkpoint(
             rng,
             net,
-            permute_layers=LAYERS,
+            permute_layers=LAYERS_TO_PERMUTE,
             num_permutations=2,  # 2x batch size
         )
         del augmented[0]  # don't need the original
@@ -136,9 +105,6 @@ if __name__ == "__main__":
     parser.add_argument('--bs', type=int, help='Batch size', default=32)
     parser.add_argument('--epochs', type=int, help='Number of epochs', 
                         default=25)
-    parser.add_argument('--task', type=str, help='Task to train on. One of \
-                        "batch_size", "augmentation", "optimizer", \
-                        "activation", "initialization"', default="batch_size")
     parser.add_argument('--use_wandb', action='store_true', help='Use wandb')
     parser.add_argument('--ndata', type=int, help='Number of data points',
                         default=10000)
@@ -150,24 +116,33 @@ if __name__ == "__main__":
     CHUNK_SIZE = 1024
     D_MODEL = 512
     LOG_INTERVAL = 5
-    DATA_DIR = os.path.join(module_path, 'data/david_backdoors/cifar10')
+    #DATA_DIR = os.path.join(module_path, 'data/david_backdoors/cifar10')
+    DATA_DIR = os.path.join(module_path, 'data/david_backdoors/mnist/models')
+    #INPUTS_DIRNAME = "poison_easy"  # for CIFAR-10
+    INPUTS_DIRNAME = "poison"  # for MNIST
+    TARGETS_DIRNAME = "clean"
 
-    NOTES = "Fixed the terrible bug, I think"
-    TAGS = ["test"]
+#    architecture = torch_utils.CNNMedium()  # for CIFAR-10
+    architecture = torch_utils.CNNSmall()  # for MNIST
+
+#    NOTES = "Fixed the terrible bug, I think"
+    NOTES = "testing"
+    TAGS = ["test", "MNIST"]
 
     # Load model checkpoints
     print("Loading data...")
-    inputs = load_nets(name="poison_easy", n=args.ndata)
-    targets = load_nets(name="clean", n=args.ndata)
-
-#    inputs, get_pytorch_model = load_and_process_nets(name="poison_easy", n=args.ndata)
-#    targets, _ = load_and_process_nets(name="clean", n=args.ndata)
+    inputs, targets = torch_utils.load_input_and_target_weights(
+        model = architecture,
+        num_models=args.ndata, 
+        data_dir=DATA_DIR,
+        inputs_dirname=INPUTS_DIRNAME,
+    )
 
     if FILTER:
         inputs, targets = preprocessing.filter_data(inputs, targets)
 
     (train_inputs, train_targets, 
-        val_inputs, val_targets) = split_data(inputs, targets)
+        val_inputs, val_targets) = split_data(inputs, targets, 0.9)
     print("Done.")
 
 
@@ -196,10 +171,11 @@ if __name__ == "__main__":
         notes=NOTES,
         )  
 
-    steps_per_epoch = len(train_inputs) // (args.bs // 2)
+    steps_per_epoch = len(train_inputs) // args.bs
 
     print()
     print(f"Number of training examples: {len(train_inputs)}.")
+    print(f"Number of validation examples: {len(val_inputs)}.")
     print("Steps per epoch:", steps_per_epoch)
     print("Total number of steps:", steps_per_epoch * args.epochs)
     print()
@@ -237,30 +213,33 @@ if __name__ == "__main__":
 #        np_rng.shuffle(train_targets)
 
         train_batches = data_iterator(
-            train_inputs, train_targets, batchsize=args.bs // 2, skip_last=True)
+            train_inputs, train_targets, batchsize=args.bs, skip_last=True)
         val_batches = data_iterator(
-            val_inputs, val_targets, batchsize=args.bs // 2, skip_last=False)
+            val_inputs, val_targets, batchsize=args.bs, skip_last=False)
 
         train_loader = DataLoader(train_batches, 43, num_workers=4)
 
 
         # Validate every epoch
-        valdata = []
-        for batch in val_batches:
-            rng, subkey = random.split(rng)
-            batch = process_batch(batch, 0, augment=False)
-            state, val_metrics_dict = updater.compute_val_metrics(
-                state, batch)
-            val_metrics_dict.update({"epoch": epoch})
-            valdata.append(val_metrics_dict)
+        if epoch % 1 == 0:
+            valdata = []
+            for batch in val_batches:
+                rng, subkey = random.split(rng)
+                batch = process_batch(batch, 0, augment=False)
+                state, val_metrics_dict = updater.compute_val_metrics(
+                    state, batch)
+                val_metrics_dict.update({"epoch": epoch})
+                valdata.append(val_metrics_dict)
 
-        means = jax.tree_map(lambda *x: np.mean(x), *valdata)
-        logger.log(state, means)
+            means = jax.tree_map(lambda *x: np.mean(x), *valdata)
+            logger.log(state, means)
 
         # Train
         for batch in train_loader:
             #rng, subkey = random.split(rng)
             #batch = process_batch(batch, subkey, augment=True)
+#            print(batch["input"].shape)
+#            print(batch["input"][0:2, 30, 345:365])  # batch, chunk, embedding
             state, train_metrics = updater.update(state, batch)
             train_metrics.update({"epoch": epoch})
             logger.log(state, train_metrics)
