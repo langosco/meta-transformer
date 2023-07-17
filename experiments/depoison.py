@@ -181,7 +181,28 @@ if __name__ == "__main__":
 
 
     # Initialization
-    opt = optax.adamw(args.lr, weight_decay=args.wd)
+    @optax.inject_hyperparams
+    def optimizer(lr: float, 
+                  wd: float) -> optax.GradientTransformation:
+        return optax.adamw(lr, weight_decay=wd)
+
+    # simple lr schedule
+    schedule = optax.warmup_cosine_decay_schedule(
+        init_value=1e-5,
+        peak_value=args.lr,
+        warmup_steps=50,
+        decay_steps=10_000,
+        end_value=1e-5,
+    )
+#    schedule = lambda step: args.lr
+
+    decay_steps = 3000
+    decay_factor = 0.5
+    def schedule(step):
+        """Decay by decay_factor every decay_steps steps."""
+        return args.lr * decay_factor**(step // decay_steps)
+
+    opt = optimizer(lr=schedule, wd=args.wd)
     model = create_meta_model(model_config)
     loss_fn = create_loss_fn(model.apply)
     updater = Updater(opt=opt, model=model, loss_fn=loss_fn)
@@ -212,12 +233,8 @@ if __name__ == "__main__":
     for epoch in range(args.epochs):
         rng, subkey = random.split(rng)
 
-        # Prepare data
-        # too expensive to shuffle in memory
+        # TODO: shuffle data (too expensive to shuffle in memory?)
         # shuff_inputs, shuff_targets = shuffle_data(subkey, train_inputs, train_targets)
-
-        # shuffle separately, should not work!!!
-#        np_rng.shuffle(train_targets)
 
         train_batches = data_iterator(
             train_inputs, train_targets, batchsize=args.bs, skip_last=True)
@@ -228,25 +245,22 @@ if __name__ == "__main__":
 
 
         # Validate every epoch
-        if epoch % 1 == 0:
-            valdata = []
-            for batch in val_batches:
-                rng, subkey = random.split(rng)
-                batch = process_batch(batch, 0, augment=False)
-                validate_shapes(batch)
-                state, val_metrics_dict = updater.compute_val_metrics(
-                    state, batch)
-                val_metrics_dict.update({"epoch": epoch})
-                valdata.append(val_metrics_dict)
+        valdata = []
+        for batch in val_batches:
+            rng, subkey = random.split(rng)
+            batch = process_batch(batch, 0, augment=False)
+            validate_shapes(batch)
+            state, val_metrics_dict = updater.compute_val_metrics(
+                state, batch)
+            val_metrics_dict.update({"epoch": epoch})
+            valdata.append(val_metrics_dict)
 
-            means = jax.tree_map(lambda *x: np.mean(x), *valdata)
-            logger.log(state, means)
+        means = jax.tree_map(lambda *x: np.mean(x), *valdata)
+        logger.log(state, means)
 
         # Train
         for batch in train_loader:
             validate_shapes(batch)
-            #rng, subkey = random.split(rng)
-            #batch = process_batch(batch, subkey, augment=True)
             state, train_metrics = updater.update(state, batch)
             train_metrics.update({"epoch": epoch})
             logger.log(state, train_metrics)

@@ -67,6 +67,9 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
         metrics = {
                 "train/loss": loss,
                 "step": state.step,
+                "lr": state.opt_state.hyperparams["lr"],
+                "grad_norm": optax.global_norm(grads),
+                "weight_norm": optax.global_norm(state.params),
         }
         metrics.update({f"train/{k}": v for k, v in aux_metrics.items()})
         state.step += 1
