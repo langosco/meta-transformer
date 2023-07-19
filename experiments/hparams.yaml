@@ -30,7 +30,7 @@ parameters:
     use_embedding:
         values: [True, False]
     ndata:
-        value: 5000
+        value: 23_700
     epochs:
         value: 10
 command:

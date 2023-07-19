@@ -1,22 +1,13 @@
 import jax
-from jax import random, jit, value_and_grad, nn
+from jax import random, jit, value_and_grad
 import jax.numpy as jnp
-import numpy as np
 import haiku as hk
 import optax
 import chex
 import functools
 from typing import Mapping, Any, Tuple, List, Iterator, Optional, Dict
 from jax.typing import ArrayLike
-from meta_transformer import utils, preprocessing, torch_utils, module_path
-from meta_transformer.meta_model import create_meta_model
-from meta_transformer.meta_model import MetaModelConfig as ModelConfig
 import wandb
-from nninn.repl.utils import load_nets, classes_per_task
-import nninn
-import os
-import argparse
-from dataclasses import asdict
 
 
 # Optimizer and update function
@@ -86,7 +77,7 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
 @chex.dataclass
 class Logger:
     log_interval: int = 50
-    disable_wandb: bool = False
+    disable_wandb: bool = False  # TODO I think I don't need this if I use mode='disabled'
     store: bool = False
 
     def __post_init__(self):

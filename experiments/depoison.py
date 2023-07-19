@@ -20,6 +20,7 @@ from augmentations import permute_checkpoint
 
 VAL_DATA_RATIO = 0.1
 DATA_STD = 0.0582
+# DATA_STD = 0.0586  # for MNIST - similar enough
 
 
 def acc_from_outputs(outputs, targets):
