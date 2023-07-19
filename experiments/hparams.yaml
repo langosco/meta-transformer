@@ -1,0 +1,40 @@
+name: depoisoning_sweep
+program: ./depoison.py
+method: bayes
+metric:
+    name: train/loss
+    goal: minimize
+parameters:
+    lr:
+        distribution: log_uniform
+        min: -13
+        max: -6
+    wd:
+        distribution: log_uniform
+        min: -13
+        max: -6
+    adam_b1:
+        distribution: log_uniform
+        min: -11
+        max: -3
+    adam_b2:
+        distribution: log_uniform
+        min: -11
+        max: -3
+    adam_eps:
+        distribution: log_uniform
+        min: -21
+        max: -8
+    bs:
+        values: [32, 64]
+    use_embedding:
+        values: [True, False]
+    ndata:
+        value: 5000
+    epochs:
+        value: 10
+command:
+    - python3
+    - depoison.py
+    - --use_wandb
+    - ${args}

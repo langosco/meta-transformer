@@ -42,7 +42,7 @@ def create_loss_fn(model_forward: callable):
 
 
 LAYERS_TO_PERMUTE = ['Conv2d_0', 'Conv2d_1', 'Conv2d_2', 'Conv2d_3', 
-          'Conv2d_4', 'Conv2d_5', 'Linear_6', 'Linear_7'] 
+          'Conv2d_4', 'Conv2d_5', 'Linear_6', 'Linear_7']  # TODO this depends on dataset
 
 
 def augment_list_of_nets(nets: List[dict], seed):
@@ -69,7 +69,7 @@ def process_nets(nets: List[dict],
     nets = augment_list_of_nets(nets, seed) if augment else nets
     nets = np.stack([preprocessing.preprocess(net, CHUNK_SIZE)[0]
                         for net in nets])
-    return nets / DATA_STD
+    return nets / DATA_STD  # TODO this is dependent on dataset!!
 
 
 def process_batch(batch: dict, seed: int, augment: bool = True) -> dict:
@@ -107,13 +107,19 @@ if __name__ == "__main__":
     parser.add_argument('--use_wandb', action='store_true', help='Use wandb')
     parser.add_argument('--ndata', type=int, help='Number of data points',
                         default=10000)
+    parser.add_argument('--use_embedding', type=bool, help='Use embedding', 
+                        default=False)
+    parser.add_argument('--adam_b1', type=float, help='Learning rate', default=0.1)
+    parser.add_argument('--adam_b2', type=float, help='Weight decay', default=0.001)
+    parser.add_argument('--adam_eps', type=float, help='Weight decay', default=1e-8)
     args = parser.parse_args()
 
     rng = random.PRNGKey(42)
 
+    model_scale = 2
     FILTER = False
     CHUNK_SIZE = 1024
-    D_MODEL = 512
+    D_MODEL = int(512*model_scale)
     LOG_INTERVAL = 5
     #DATA_DIR = os.path.join(module_path, 'data/david_backdoors/cifar10')
     DATA_DIR = os.path.join(module_path, 'data/david_backdoors/mnist/models')
@@ -140,23 +146,23 @@ if __name__ == "__main__":
         inputs, targets = preprocessing.filter_data(inputs, targets)
 
     (train_inputs, train_targets, 
-        val_inputs, val_targets) = split_data(inputs, targets, 0.1)
+        val_inputs, val_targets) = split_data(inputs, targets, VAL_DATA_RATIO)
     print("Done.")
 
 
     model_config = ModelConfig(
         model_size=D_MODEL,
-        num_heads=8,
-        num_layers=12,
-        dropout_rate=0.1,
-        use_embedding=True,
+        num_heads=int(8*model_scale),
+        num_layers=int(12*model_scale),
+        dropout_rate=0.05,
+        use_embedding=args.use_embedding,
     )
 
 
     wandb.init(
         mode="online" if args.use_wandb else "disabled",
         project="meta-models-depoison",
-        tags=[],
+        tags=["testing-sweep"],
         config={
             "dataset": "MNIST-meta",
             "lr": args.lr,
@@ -166,6 +172,9 @@ if __name__ == "__main__":
             "dataset": DATA_DIR,
             "model_config": asdict(model_config),
             "num_datapoints": args.ndata,
+            "adam/b1": args.adam_b1,
+            "adam/b2": args.adam_b2,
+            "adam/eps": args.adam_eps,
         },
         notes=NOTES,
         )  
@@ -184,24 +193,33 @@ if __name__ == "__main__":
     @optax.inject_hyperparams
     def optimizer(lr: float, 
                   wd: float) -> optax.GradientTransformation:
-        return optax.adamw(lr, weight_decay=wd)
+        return optax.adamw(lr, 
+                           b1=1-args.adam_b1,
+                           b2=1-args.adam_b2,
+                           eps=args.adam_eps,
+                           weight_decay=wd)
 
     # simple lr schedule
-    schedule = optax.warmup_cosine_decay_schedule(
-        init_value=1e-5,
-        peak_value=args.lr,
-        warmup_steps=50,
-        decay_steps=10_000,
-        end_value=1e-5,
-    )
+#    schedule = optax.warmup_cosine_decay_schedule(
+#        init_value=1e-5,
+#        peak_value=args.lr,
+#        warmup_steps=50,
+#        decay_steps=10_000,
+#        end_value=1e-5,
+#    )
 #    schedule = lambda step: args.lr
 
     decay_steps = 3000
     decay_factor = 0.5
-    def schedule(step):
+    def schedule(step):  # decay on a log scale instead? ie every 2x steps or so
         """Decay by decay_factor every decay_steps steps."""
-        return args.lr * decay_factor**(step // decay_steps)
-
+        step = jnp.minimum(step, decay_steps * 5)  # wait till 5x decay_steps to start
+        decay_amount = jnp.minimum(step // decay_steps, 5)  # decay 5 times
+        return args.lr * decay_factor**decay_amount
+    
+#    def log_schedule(step):
+#        return args.lr * (1 - step // decay_steps)
+    
     opt = optimizer(lr=schedule, wd=args.wd)
     model = create_meta_model(model_config)
     loss_fn = create_loss_fn(model.apply)
