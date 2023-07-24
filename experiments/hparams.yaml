@@ -2,29 +2,29 @@ name: depoisoning_sweep
 program: ./depoison.py
 method: bayes
 metric:
-    name: train/loss
+    name: val/loss
     goal: minimize
 parameters:
     lr:
-        distribution: log_uniform
-        min: -13
-        max: -6
+        distribution: log_uniform_values
+        min: 0.00001
+        max: 0.001
     wd:
-        distribution: log_uniform
-        min: -13
-        max: -6
+        distribution: log_uniform_values
+        min: 0.000001
+        max: 0.001
     adam_b1:
-        distribution: log_uniform
-        min: -11
-        max: -3
+        distribution: log_uniform_values
+        min: 0.00001
+        max: 0.1
     adam_b2:
-        distribution: log_uniform
-        min: -11
-        max: -3
+        distribution: log_uniform_values
+        min: 0.00001
+        max: 0.1
     adam_eps:
-        distribution: log_uniform
-        min: -21
-        max: -8
+        distribution: log_uniform_values
+        min: 1e-10
+        max: 1e-3
     bs:
         values: [32, 64]
     use_embedding:
@@ -32,7 +32,7 @@ parameters:
     ndata:
         value: 23_700
     epochs:
-        value: 10
+        value: 40
 command:
     - python3
     - depoison.py
