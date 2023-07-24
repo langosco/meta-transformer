@@ -1,3 +1,6 @@
+import os
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.5"  # preallocate a bit less memory so we can use pytorch next to jax
+
 import jax
 from jax import random, jit, value_and_grad, nn
 import jax.numpy as jnp
@@ -10,7 +13,6 @@ from meta_transformer import utils, preprocessing, torch_utils, module_path
 from meta_transformer.meta_model import create_meta_model
 from meta_transformer.meta_model import MetaModelConfig as ModelConfig
 import wandb
-import os
 import argparse
 from dataclasses import asdict
 from meta_transformer.train import Updater, Logger
@@ -21,6 +23,7 @@ from augmentations import permute_checkpoint
 VAL_DATA_RATIO = 0.1
 DATA_STD = 0.0582
 # DATA_STD = 0.0586  # for MNIST - similar enough
+
 
 
 def acc_from_outputs(outputs, targets):
@@ -34,11 +37,17 @@ def loss_from_outputs(outputs, targets):
 
 def create_loss_fn(model_forward: callable):
     """model_forward = model.apply if model is a hk.transform"""
-    def loss_fn(params, rng, data: Dict[str, ArrayLike], is_training: bool = True):
+    def loss_fn(
+            params: dict, 
+            rng: ArrayLike,
+            data: Dict[str, ArrayLike], 
+            is_training: bool = True
+        ):
         """data is a dict with keys 'input' and 'target'."""
         outputs = model_forward(params, rng, data["input"], is_training)
         loss = loss_from_outputs(outputs, data["target"])
-        return loss, {}
+        aux = {"outputs": outputs, "metrics": {}}
+        return loss, aux
     return loss_fn
 
 
@@ -98,6 +107,14 @@ class DataLoader:
                 yield future.result()
 
 
+def validate_shapes(batch):
+    """Check that the shapes are correct."""
+    if not batch["input"].shape == batch["target"].shape:
+        raise ValueError("Input and target shapes do not match. "
+                        f"Received input shaped: {batch['input'].shape} "
+                        f"and target shaped: {batch['target'].shape}.")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Training run')
     parser.add_argument('--lr', type=float, help='Learning rate', default=2e-5)
@@ -136,8 +153,8 @@ if __name__ == "__main__":
 
     # Load model checkpoints
     print("Loading data...")
-    inputs, targets = torch_utils.load_input_and_target_weights(
-        model = architecture,
+    inputs, targets, get_pytorch_model = torch_utils.load_input_and_target_weights(
+        model=architecture,
         num_models=args.ndata, 
         data_dir=DATA_DIR,
         inputs_dirname=INPUTS_DIRNAME,
@@ -151,6 +168,7 @@ if __name__ == "__main__":
     print("Done.")
 
 
+    # Meta-Model Initialization
     model_config = ModelConfig(
         model_size=D_MODEL,
         num_heads=int(8*model_scale),
@@ -240,13 +258,50 @@ if __name__ == "__main__":
 
     np_rng = np.random.default_rng()
 
-    def validate_shapes(batch):
-        """Check that the shapes are correct."""
-        if not batch["input"].shape == batch["target"].shape:
-            raise ValueError("Input and target shapes do not match. "
-                             f"Received input shaped: {batch['input'].shape} "
-                             f"and target shaped: {batch['target'].shape}.")
 
+    # Helper fns to validate reconstructed base model
+    # TODO only MNIST for now! Should do this for CIFAR-10 too
+    from gen_models import poison, config
+    cfg = config.Config()
+    unpreprocess = preprocessing.get_unpreprocess_fn(
+        val_inputs[0],
+        chunk_size=CHUNK_SIZE,
+    )
+
+
+    mnist_test = torch_utils.load_mnist_test_data()
+    mnist_poisoned = poison.poison_set(mnist_test, train=False, cfg=cfg)
+    base_data_poisoned, base_labels_poisoned, _ = mnist_poisoned.tensors
+    base_data_clean, base_labels_clean = mnist_test.tensors
+
+
+    def validate_base(model):  # TODO: reduntant forward passes
+        """Validate reconstructed base model."""
+        return dict(
+            accuracy=torch_utils.get_accuracy(
+                model, base_data_clean, base_labels_clean
+            ),
+            degree_poisoned=torch_utils.get_accuracy(
+                model, base_data_poisoned, base_labels_poisoned
+            ),
+            loss=torch_utils.get_loss(
+                model, base_data_clean, base_labels_clean
+            ),
+            degree_poisoned_loss=torch_utils.get_loss(
+                model, base_data_poisoned, base_labels_poisoned
+            ),
+        )
+
+
+    def get_reconstruction_metrics(meta_model_outputs):
+        """Instantiates a base model from the outputs of the meta model,
+        then validates the base model on the base data (clean and poisoned)."""
+        base_params = unpreprocess(meta_model_outputs)
+        base_params = utils.tree_to_numpy(base_params)
+        base_model = get_pytorch_model(base_params)
+        base_model.to("cuda")
+        return validate_base(base_model)
+        
 
     # Training loop
     for epoch in range(args.epochs):
@@ -269,13 +324,16 @@ if __name__ == "__main__":
             rng, subkey = random.split(rng)
             batch = process_batch(batch, 0, augment=False)
             validate_shapes(batch)
-            state, val_metrics_dict = updater.compute_val_metrics(
+            state, val_metrics_dict, aux = updater.compute_val_metrics(
                 state, batch)
+            rmetrics = get_reconstruction_metrics(aux["outputs"])
+            val_metrics_dict.update(rmetrics)
             val_metrics_dict.update({"epoch": epoch})
             valdata.append(val_metrics_dict)
 
         means = jax.tree_map(lambda *x: np.mean(x), *valdata)
         logger.log(state, means)
+
 
         # Train
         for batch in train_loader:
@@ -283,3 +341,8 @@ if __name__ == "__main__":
             state, train_metrics = updater.update(state, batch)
             train_metrics.update({"epoch": epoch})
             logger.log(state, train_metrics)
+
+
+# save checkpoint when training is done
+from time import time
+utils.save_checkpoint(state.params, name=f"depoison_run_{int(time())}")

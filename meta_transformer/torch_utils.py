@@ -34,7 +34,7 @@ def get_param_dict(model: torch.nn.Module) -> Tuple[Dict, callable]:
     def get_pytorch_model(params: dict) -> torch.nn.Module:
         """Map params back to a pytorch model (the inverse)."""
         j = 0
-        for c in model.modules():
+        for c in model.children():
             for layer in c:
                 if isinstance(layer, (nn.Conv2d, nn.Linear)):
                     layer.weight = nn.Parameter(torch.from_numpy(params[f'{layer._get_name()}_{j}']['w']))
@@ -58,7 +58,9 @@ def load_input_and_target_weights(
         inputs_dirname: str = "poison",
         targets_dirname: str = "clean") -> Tuple[Dict, Dict]:
     """Load pytorch weights from a directory. Match clean and poisoned models
-    by filename."""
+    by filename.
+    Assumption: the architecture of the model is the same for all models.
+    If not the same, then get_pytorch_model will not work."""
     inputs_dir = os.path.join(data_dir, inputs_dirname)
     targets_dir = os.path.join(data_dir, targets_dirname)
     target_prefix = 'clean_'
@@ -80,8 +82,12 @@ def load_input_and_target_weights(
         try:
             input_path = os.path.join(inputs_dir, checkpoint)
             target_path = os.path.join(
-                targets_dir, target_prefix + get_postfix_from_filename(checkpoint))
-            inputs.append(get_param_dict(load_model(model, input_path))[0])
+                targets_dir, 
+                target_prefix + get_postfix_from_filename(checkpoint)
+                )
+            params, get_pytorch_model = get_param_dict(
+                load_model(model, input_path))
+            inputs.append(params)
         except FileNotFoundError:
             print(f'Could not find {target_path}.')
             continue  # TODO is there a more elegant way to do this?
@@ -92,7 +98,7 @@ def load_input_and_target_weights(
             print(f'Could not find {target_path}.')
             del inputs[-1]
     
-    return np.array(inputs), np.array(targets)
+    return np.array(inputs), np.array(targets), get_pytorch_model
 
 
 
@@ -163,3 +169,38 @@ class CNNMedium(nn.Module):
         x = x.view(-1, 128 * 4 * 4)
         x = self.classifier(x)
         return x
+
+
+
+# Data
+import datasets
+from torch.utils.data import TensorDataset
+
+
+def load_mnist_test_data():
+    dataset = datasets.load_dataset('mnist')
+    dataset = dataset.with_format("torch")
+
+    # Split the dataset into train and test sets
+    test_data, test_labels = dataset['test']["image"], dataset['test']["label"]
+    test_data  = test_data.reshape(-1, 1, 28, 28) / 255.
+
+    test_data, test_labels = test_data.to('cuda'), test_labels.to('cuda')
+    return TensorDataset(test_data, test_labels)
+
+
+def get_accuracy(model: nn.Module, inputs: torch.Tensor, targets: torch.Tensor) -> float:
+    """Compute accuracy of model on inputs and targets."""
+    with torch.no_grad():
+        outputs = model(inputs.float())
+        _, predicted = torch.max(outputs.data, 1)
+        correct = (predicted == targets).sum().item()
+        return correct / len(targets)
+    
+
+def get_loss(model: nn.Module, inputs: torch.Tensor, targets: torch.Tensor) -> float:
+    """Compute loss of model on inputs and targets."""
+    with torch.no_grad():
+        outputs = model(inputs.float())
+        loss = nn.CrossEntropyLoss()(outputs, targets)
+        return loss.item()

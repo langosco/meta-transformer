@@ -80,12 +80,13 @@ def get_param_shapes(
     }
 
 
-def get_unpreprocess(
+def get_unpreprocess_fn(
         params: Dict[str, Dict[str, ArrayLike]],
         chunk_size: int,
         verbose: bool = True,
         ) -> Tuple[Dict[str, Dict[str, Tuple[int, ...]]], int]:
-    """Preprocess once to get the unpreprocess function."""
+    """Extra function that preprocess once just 
+    to get the unpreprocess function."""
     params, _ = filter_layers(params)
     chunks, unpreprocess = preprocess(params, chunk_size)
     raveled_params = jax.flatten_util.ravel_pytree(params)[0]

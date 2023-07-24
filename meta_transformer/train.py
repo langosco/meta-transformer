@@ -29,10 +29,10 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
     # TODO this is hardcoded to val
     def get_metrics_and_loss(self, rng, params, data):
         """Compute acc and loss on test set."""
-        loss, metrics = self.loss_fn(params, rng, data, is_training=False)
+        loss, aux = self.loss_fn(params, rng, data, is_training=False)
         out = {"val/loss": loss}
-        out.update({f"val/{k}": v for k, v in metrics.items()})
-        return out
+        out.update({f"val/{k}": v for k, v in aux["metrics"].items()})
+        return out, aux
 
     @functools.partial(jit, static_argnums=0)
     def init_params(self, rng: ArrayLike, data: dict) -> dict:
@@ -50,7 +50,7 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
     @functools.partial(jit, static_argnums=0)
     def update(self, state: TrainState, data: dict) -> Tuple[TrainState, dict]:
         state.rng, subkey = jax.random.split(state.rng)
-        (loss, aux_metrics), grads = value_and_grad(self.loss_fn, has_aux=True)(
+        (loss, aux), grads = value_and_grad(self.loss_fn, has_aux=True)(
                 state.params, subkey, data)
         updates, state.opt_state = self.opt.update(
             grads, state.opt_state, state.params)
@@ -62,7 +62,7 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
                 "grad_norm": optax.global_norm(grads),
                 "weight_norm": optax.global_norm(state.params),
         }
-        metrics.update({f"train/{k}": v for k, v in aux_metrics.items()})
+        metrics.update({f"train/{k}": v for k, v in aux["metrics"].items()})
         state.step += 1
         return state, metrics
 
@@ -71,7 +71,8 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
                             state: TrainState, 
                             data: dict) -> Tuple[TrainState, dict]:
         state.rng, subkey = random.split(state.rng)
-        return state, self.get_metrics_and_loss(subkey, state.params, data)
+        metrics, aux = self.get_metrics_and_loss(subkey, state.params, data)
+        return state, metrics, aux
 
 
 @chex.dataclass
@@ -90,7 +91,7 @@ class Logger:
             metrics.update(val_metrics)
 
         metrics = {k: v.item() if isinstance(v, jnp.ndarray) else v
-                   for k, v in metrics.items()}
+                for k, v in metrics.items()}
         return metrics
 
     # TODO change args, eg metrics, optional_metrics

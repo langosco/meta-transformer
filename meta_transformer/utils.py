@@ -45,3 +45,31 @@ def tree_list(trees):
 def tree_stack(trees):
     """Stacks a list of trees into a single tree with an extra dimension."""
     return jax.tree_map(lambda *x: jnp.stack(x), *trees)
+
+
+def tree_to_numpy(tree):
+    """Converts a tree of arrays to a tree of numpy arrays."""
+    return jax.tree_map(lambda x: np.array(x), tree)
+
+
+# Checkpointing
+import orbax.checkpoint
+from etils import epath
+import os
+MODULE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+CHECKPOINTS_DIR = epath.Path(MODULE_PATH) / "experiments/checkpoints"
+checkpointer = orbax.checkpoint.PyTreeCheckpointer()
+
+
+def save_checkpoint(params, name="test", path=CHECKPOINTS_DIR):
+    savedir = path / name
+    params = {k.replace("/", "::"): v for k, v in params.items()}
+    checkpointer.save(savedir, params)
+    return
+
+
+def load_checkpoint(name="test", path=CHECKPOINTS_DIR):
+    savedir = path / name
+    params = checkpointer.restore(savedir)
+    params = {k.replace("::", "/"): v for k, v in params.items()}
+    return params
