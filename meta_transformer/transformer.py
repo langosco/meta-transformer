@@ -46,7 +46,7 @@ class Transformer(hk.Module):
 
   num_heads: int
   num_layers: int
-  key_size: int
+  key_size: int  # usually d_model // num_heads
   dropout_rate: float
   widening_factor: int = 4
   name: Optional[str] = None

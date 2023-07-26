@@ -64,12 +64,12 @@ def preprocess(
     padded = pad_to_chunk_size(flat_params, chunk_size)
     chunks = padded.reshape(-1, chunk_size)
     
-    def unprocess(chunks: ArrayLike) -> Dict[str, Dict[str, ArrayLike]]:
+    def unpreprocess(chunks: ArrayLike) -> Dict[str, Dict[str, ArrayLike]]:
         """Inverse of preprocess."""
         flat_params_new = chunks.flatten()[:len(flat_params)]
         return unfilter(unflatten(flat_params_new))
 
-    return chunks, unprocess
+    return chunks, unpreprocess
     
 
 def get_param_shapes(
@@ -89,8 +89,8 @@ def get_unpreprocess_fn(
     to get the unpreprocess function."""
     params, _ = filter_layers(params)
     chunks, unpreprocess = preprocess(params, chunk_size)
-    raveled_params = jax.flatten_util.ravel_pytree(params)[0]
     if verbose:
+        raveled_params = jax.flatten_util.ravel_pytree(params)[0]
         print()
         print(f"Number of (relevant) layers per net: {len(params)}")
         print(f"Number of parameters per net: "
