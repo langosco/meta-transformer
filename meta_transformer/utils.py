@@ -47,6 +47,20 @@ def tree_stack(trees):
     return jax.tree_map(lambda *x: jnp.stack(x), *trees)
 
 
+def tree_unstack(tree):
+    """Unstacks a tree with an extra dimension into a list of trees."""
+    trees = []
+    i = 0
+    tree = tree_to_numpy(tree)  # to make sure we get an IndexError
+    while True:
+        try:
+            trees.append(jax.tree_map(lambda x: x[i], tree))
+            i += 1
+        except IndexError:
+            break
+    return trees
+
+
 def tree_to_numpy(tree):
     """Converts a tree of arrays to a tree of numpy arrays."""
     return jax.tree_map(lambda x: np.array(x), tree)

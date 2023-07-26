@@ -5,7 +5,7 @@ import haiku as hk
 import optax
 import chex
 import functools
-from typing import Mapping, Any, Tuple, List, Iterator, Optional, Dict
+from typing import Mapping, Any, Tuple, List, Iterator, Optional
 from jax.typing import ArrayLike
 import wandb
 
@@ -75,35 +75,41 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
         return state, metrics, aux
 
 
+def print_metrics(metrics: Mapping[str, Any], prefix: str = ""):
+    """Prints metrics to stdout. Assumption: metrics is a dict of scalars
+    and always contains the keys "step" and "epoch".
+    """
+    print(prefix, end="")
+    print(f"Step: {metrics['step']}, Epoch: {metrics['epoch']}, ", end="")
+    try:
+        metrics_to_print = ["train/loss", "grad_norm"]
+        print(", ".join([f"{k}: {metrics[k]:.3f}" for k in metrics_to_print]))
+    except KeyError:
+        metrics_to_print = [k for k in metrics.keys() if k not in ["step", "epoch"]]
+        print(", ".join([f"{k}: {round(metrics[k], 3)}" for k in metrics_to_print]))
+
+
 @chex.dataclass
 class Logger:
     log_interval: int = 50
-    disable_wandb: bool = False  # TODO I think I don't need this if I use mode='disabled'
     store: bool = False
 
     def __post_init__(self):
         self.data = []
 
-    def clean(self, train_metrics, val_metrics):
-        metrics = train_metrics or {}
-
-        if val_metrics is not None:
-            metrics.update(val_metrics)
-
+    def clean(self, metrics: dict) -> dict:
         metrics = {k: v.item() if isinstance(v, jnp.ndarray) else v
                 for k, v in metrics.items()}
         return metrics
 
-    # TODO change args, eg metrics, optional_metrics
     def log(self,
             state: TrainState,
-            train_metrics: dict = None,
-            val_metrics: dict = None):
-        metrics = self.clean(train_metrics, val_metrics)
-        if state.step % self.log_interval == 0 or val_metrics is not None:
-            print(", ".join([f"{k}: {round(v, 3)}" for k, v in metrics.items()]))
-            if not self.disable_wandb:
-                wandb.log(metrics, step=state.step)
+            metrics: dict,
+            force_log: Optional[bool] = False):
+        metrics = self.clean(metrics)
+        if state.step % self.log_interval == 0 or force_log:
+            print_metrics(metrics)
+            wandb.log(metrics, step=state.step)
             if self.store:
                 self.log_append(state, metrics)
     

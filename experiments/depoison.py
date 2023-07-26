@@ -1,5 +1,5 @@
 import os
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.5"  # preallocate a bit less memory so we can use pytorch next to jax
+#os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.75"  # preallocate a bit less memory so we can use pytorch next to jax
 
 import jax
 from jax import random, jit, value_and_grad, nn
@@ -21,9 +21,8 @@ from augmentations import permute_checkpoint
 #permute_checkpoint = lambda *args, **kwargs: [None]
 
 VAL_DATA_RATIO = 0.1
-DATA_STD = 0.0582
+DATA_STD = 0.0582  # for CIFAR-10
 # DATA_STD = 0.0586  # for MNIST - similar enough
-
 
 
 def acc_from_outputs(outputs, targets):
@@ -74,7 +73,7 @@ def augment_list_of_nets(nets: List[dict], seed):
 def process_nets(nets: List[dict], 
                 seed: int,
                 augment: bool = True,
-                 ) -> ArrayLike:
+                ) -> ArrayLike:
     """Permutation augment, then flatten to arrays."""
     nets = augment_list_of_nets(nets, seed) if augment else nets
     nets = np.stack([preprocessing.preprocess(net, CHUNK_SIZE)[0]
@@ -124,12 +123,13 @@ if __name__ == "__main__":
                         default=25)
     parser.add_argument('--use_wandb', action='store_true', help='Use wandb')
     parser.add_argument('--ndata', type=int, help='Number of data points',
-                        default=10000)
+                        default=1000)
     parser.add_argument('--use_embedding', type=bool, help='Use embedding', 
                         default=False)
     parser.add_argument('--adam_b1', type=float, help='Learning rate', default=0.1)
     parser.add_argument('--adam_b2', type=float, help='Weight decay', default=0.001)
     parser.add_argument('--adam_eps', type=float, help='Weight decay', default=1e-8)
+    parser.add_argument('--chunk_size', type=int, help='Chunk size', default=1024)
     args = parser.parse_args()
 
     rng = random.PRNGKey(42)
@@ -139,17 +139,17 @@ if __name__ == "__main__":
     CHUNK_SIZE = 1024
     D_MODEL = int(512*model_scale)
     LOG_INTERVAL = 5
-    #DATA_DIR = os.path.join(module_path, 'data/david_backdoors/cifar10')
-    DATA_DIR = os.path.join(module_path, 'data/david_backdoors/mnist/models')
-    #INPUTS_DIRNAME = "poison_easy"  # for CIFAR-10
-    INPUTS_DIRNAME = "poison"  # for MNIST
+    DATA_DIR = os.path.join(module_path, 'data/david_backdoors/cifar10')
+    #DATA_DIR = os.path.join(module_path, 'data/david_backdoors/mnist/models')
+    INPUTS_DIRNAME = "poison_easy"  # for CIFAR-10
+    #INPUTS_DIRNAME = "poison"  # for MNIST
     TARGETS_DIRNAME = "clean"
 
-#    architecture = torch_utils.CNNMedium()  # for CIFAR-10
-    architecture = torch_utils.CNNSmall()  # for MNIST
+    architecture = torch_utils.CNNMedium()  # for CIFAR-10
+#    architecture = torch_utils.CNNSmall()  # for MNIST
 
-    NOTES = "testing"
-    TAGS = ["test", "MNIST"]
+    NOTES = ""
+    TAGS = ["CIFAR-10"]
 
     # Load model checkpoints
     print("Loading data...")
@@ -171,7 +171,7 @@ if __name__ == "__main__":
     # Meta-Model Initialization
     model_config = ModelConfig(
         model_size=D_MODEL,
-        num_heads=int(8*model_scale),
+        num_heads=int(16*1024/D_MODEL),
         num_layers=int(12*model_scale),
         dropout_rate=0.05,
         use_embedding=args.use_embedding,
@@ -262,45 +262,57 @@ if __name__ == "__main__":
     # Helper fns to validate reconstructed base model
     # TODO only MNIST for now! Should do this for CIFAR-10 too
     from gen_models import poison, config
-    cfg = config.Config()
+    cfg = config.Config()  # default works for both MNIST and CIFAR-10
     unpreprocess = preprocessing.get_unpreprocess_fn(
         val_inputs[0],
         chunk_size=CHUNK_SIZE,
     )
 
 
-    mnist_test = torch_utils.load_mnist_test_data()
-    mnist_poisoned = poison.poison_set(mnist_test, train=False, cfg=cfg)
-    base_data_poisoned, base_labels_poisoned, _ = mnist_poisoned.tensors
-    base_data_clean, base_labels_clean = mnist_test.tensors
+#    base_test_td = torch_utils.load_mnist_test_data()
+    base_test_td = torch_utils.load_cifar10_test_data()
+
+    base_poisoned_td = poison.poison_set(base_test_td, train=False, cfg=cfg)
+    base_data_poisoned, base_labels_poisoned, _ = base_poisoned_td.tensors
+    base_data_clean, base_labels_clean = base_test_td.tensors
 
 
     def validate_base(model):  # TODO: reduntant forward passes
         """Validate reconstructed base model."""
-        return dict(
+        metrics = dict(
             accuracy=torch_utils.get_accuracy(
                 model, base_data_clean, base_labels_clean
             ),
             degree_poisoned=torch_utils.get_accuracy(
                 model, base_data_poisoned, base_labels_poisoned
             ),
+            degree_rehabilitated=torch_utils.get_accuracy(
+                model, base_data_poisoned, base_labels_clean
+            ),
             loss=torch_utils.get_loss(
-                model, base_data_clean, base_labels_clean
+                model, base_data_clean, base_labels_clean,
             ),
             degree_poisoned_loss=torch_utils.get_loss(
                 model, base_data_poisoned, base_labels_poisoned
             ),
         )
+        return {"out/" + k: v for k, v in metrics.items()}
 
 
     def get_reconstruction_metrics(meta_model_outputs):
         """Instantiates a base model from the outputs of the meta model,
-        then validates the base model on the base data (clean and poisoned)."""
-        base_params = unpreprocess(meta_model_outputs)
+        then validates the base model on the base data (clean and poisoned).
+        This function calls pytorch."""
+        base_params = jax.vmap(unpreprocess)(meta_model_outputs)  # dict of seqs of params
+        base_params = utils.tree_unstack(base_params)
         base_params = utils.tree_to_numpy(base_params)
-        base_model = get_pytorch_model(base_params)
-        base_model.to("cuda")
-        return validate_base(base_model)
+        out = []
+        for p in base_params:
+            base_model = get_pytorch_model(p)
+            base_model.to("cuda")
+            out.append(validate_base(base_model))
+            del base_model
+        return jax.tree_map(lambda *x: np.mean(x), *out)
         
 
     # Training loop
@@ -319,23 +331,25 @@ if __name__ == "__main__":
 
 
         # Validate every epoch
+        print("Validating...")
         valdata = []
         for batch in val_batches:
             rng, subkey = random.split(rng)
             batch = process_batch(batch, 0, augment=False)
             validate_shapes(batch)
-            state, val_metrics_dict, aux = updater.compute_val_metrics(
+            state, val_metrics, aux = updater.compute_val_metrics(
                 state, batch)
             rmetrics = get_reconstruction_metrics(aux["outputs"])
-            val_metrics_dict.update(rmetrics)
-            val_metrics_dict.update({"epoch": epoch})
-            valdata.append(val_metrics_dict)
+            val_metrics.update(rmetrics)
+            valdata.append(val_metrics)
 
-        means = jax.tree_map(lambda *x: np.mean(x), *valdata)
-        logger.log(state, means)
+        val_metrics_means = jax.tree_map(lambda *x: np.mean(x), *valdata)
+        val_metrics_means.update({"epoch": epoch, "step": state.step})
+        logger.log(state, val_metrics_means, force_log=True)
 
 
         # Train
+        print("Training...")
         for batch in train_loader:
             validate_shapes(batch)
             state, train_metrics = updater.update(state, batch)

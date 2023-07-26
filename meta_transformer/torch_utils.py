@@ -1,8 +1,9 @@
 import torch
-import torch.nn as nn
+from torch import nn
 import os
 from typing import Dict, Tuple
 import numpy as np
+import einops
 
 # Collection of utility functions for loading pytorch checkpoints as dicts
 # of np.arrays (e.g. for use with jax).
@@ -177,18 +178,6 @@ import datasets
 from torch.utils.data import TensorDataset
 
 
-def load_mnist_test_data():
-    dataset = datasets.load_dataset('mnist')
-    dataset = dataset.with_format("torch")
-
-    # Split the dataset into train and test sets
-    test_data, test_labels = dataset['test']["image"], dataset['test']["label"]
-    test_data  = test_data.reshape(-1, 1, 28, 28) / 255.
-
-    test_data, test_labels = test_data.to('cuda'), test_labels.to('cuda')
-    return TensorDataset(test_data, test_labels)
-
-
 def get_accuracy(model: nn.Module, inputs: torch.Tensor, targets: torch.Tensor) -> float:
     """Compute accuracy of model on inputs and targets."""
     with torch.no_grad():
@@ -204,3 +193,26 @@ def get_loss(model: nn.Module, inputs: torch.Tensor, targets: torch.Tensor) -> f
         outputs = model(inputs.float())
         loss = nn.CrossEntropyLoss()(outputs, targets)
         return loss.item()
+
+
+def load_mnist_test_data():
+    dataset = datasets.load_dataset('mnist')
+    dataset = dataset.with_format("torch")
+
+    test_data, test_labels = dataset['test']["image"], dataset['test']["label"]
+    test_data = einops.rearrange(test_data, 'b h w -> b 1 h w') / 255.
+    test_data, test_labels = test_data.to('cuda'), test_labels.to('cuda')
+    test_data, test_labels = test_data.contiguous(), test_labels.contiguous()
+    return TensorDataset(test_data, test_labels)
+
+
+def load_cifar10_test_data():
+    dataset = datasets.load_dataset('cifar10')
+    dataset = dataset.with_format("torch")
+
+    test_data, test_labels = dataset['test']["img"], dataset['test']["label"]
+    test_data = einops.rearrange(test_data, 'b h w c -> b c h w') / 255.
+    test_data, test_labels = test_data.to('cuda'), test_labels.to('cuda')
+    test_data, test_labels = test_data.contiguous(), test_labels.contiguous()
+    return TensorDataset(test_data, test_labels)
+
