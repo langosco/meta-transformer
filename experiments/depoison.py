@@ -1,6 +1,7 @@
 import os
 #os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.75"  # preallocate a bit less memory so we can use pytorch next to jax
 
+from time import time
 import jax
 from jax import random, jit, value_and_grad, nn
 import jax.numpy as jnp
@@ -76,7 +77,7 @@ def process_nets(nets: List[dict],
                 ) -> ArrayLike:
     """Permutation augment, then flatten to arrays."""
     nets = augment_list_of_nets(nets, seed) if augment else nets
-    nets = np.stack([preprocessing.preprocess(net, CHUNK_SIZE)[0]
+    nets = np.stack([preprocessing.preprocess(net, args.chunk_size)[0]
                         for net in nets])
     return nets / DATA_STD  # TODO this is dependent on dataset!!
 
@@ -130,14 +131,16 @@ if __name__ == "__main__":
     parser.add_argument('--adam_b2', type=float, help='Weight decay', default=0.001)
     parser.add_argument('--adam_eps', type=float, help='Weight decay', default=1e-8)
     parser.add_argument('--chunk_size', type=int, help='Chunk size', default=1024)
+    parser.add_argument('--d_model', type=int, help='Model size', default=1024)
+    parser.add_argument('--max_runtime', type=int, help='Max runtime in minutes', default=np.inf)
+#    parser.add_argument('--num_heads', type=int, help='Number of heads', default=16)
+#    parser.add_argument('--num_layers', type=int, help='Number of layers', default=24)
+#    parser.add_argument('--dropout_rate', type=float, help='Dropout rate', default=0.05)
     args = parser.parse_args()
 
     rng = random.PRNGKey(42)
 
-    model_scale = 2
     FILTER = False
-    CHUNK_SIZE = 1024
-    D_MODEL = int(512*model_scale)
     LOG_INTERVAL = 5
     DATA_DIR = os.path.join(module_path, 'data/david_backdoors/cifar10')
     #DATA_DIR = os.path.join(module_path, 'data/david_backdoors/mnist/models')
@@ -170,10 +173,10 @@ if __name__ == "__main__":
 
     # Meta-Model Initialization
     model_config = ModelConfig(
-        model_size=D_MODEL,
-        num_heads=int(16*1024/D_MODEL),
-        num_layers=int(12*model_scale),
-        dropout_rate=0.05,
+        model_size=args.d_model,
+        num_heads=int(args.d_model / 64),
+        num_layers=int(args.d_model / 42),
+        dropout_rate=args.dropout_rate,
         use_embedding=args.use_embedding,
     )
 
@@ -265,7 +268,7 @@ if __name__ == "__main__":
     cfg = config.Config()  # default works for both MNIST and CIFAR-10
     unpreprocess = preprocessing.get_unpreprocess_fn(
         val_inputs[0],
-        chunk_size=CHUNK_SIZE,
+        chunk_size=args.chunk_size,
     )
 
 
@@ -316,6 +319,7 @@ if __name__ == "__main__":
         
 
     # Training loop
+    start = time()
     for epoch in range(args.epochs):
         rng, subkey = random.split(rng)
 
@@ -355,8 +359,12 @@ if __name__ == "__main__":
             state, train_metrics = updater.update(state, batch)
             train_metrics.update({"epoch": epoch})
             logger.log(state, train_metrics)
+            if time() - start > args.max_runtime * 60:
+                print("=======================================")
+                print("Max runtime reached. Stopping training.")
+                print()
+                break
 
 
 # save checkpoint when training is done
-from time import time
-utils.save_checkpoint(state.params, name=f"depoison_run_{int(time())}")
+# utils.save_checkpoint(state.params, name=f"depoison_run_{int(time())}")

@@ -27,16 +27,16 @@ parameters:
         max: 1e-3
     chunk_size:
         values: [16, 32, 64, 128, 256, 512, 1024]
-    d_model:
-        values: [256, 512, 1024, 2048]
     bs:
         values: [32, 64]
     use_embedding:
         value: True
     ndata:
-        value: 23_700
+        value: 9999
     epochs:
-        value: 40
+        value: 100
+    max_runtime:  # in minutes
+        value: 3600
 command:
     - python3
     - depoison.py
