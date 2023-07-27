@@ -135,13 +135,14 @@ if __name__ == "__main__":
     parser.add_argument('--max_runtime', type=int, help='Max runtime in minutes', default=np.inf)
 #    parser.add_argument('--num_heads', type=int, help='Number of heads', default=16)
 #    parser.add_argument('--num_layers', type=int, help='Number of layers', default=24)
-#    parser.add_argument('--dropout_rate', type=float, help='Dropout rate', default=0.05)
+    parser.add_argument('--dropout_rate', type=float, help='Dropout rate', default=0.05)
     args = parser.parse_args()
 
     rng = random.PRNGKey(42)
 
     FILTER = False
     LOG_INTERVAL = 5
+    SVHN_DATA = os.path.join(module_path, 'data/david_backdoors/svhn')
     DATA_DIR = os.path.join(module_path, 'data/david_backdoors/cifar10')
     #DATA_DIR = os.path.join(module_path, 'data/david_backdoors/mnist/models')
     INPUTS_DIRNAME = "poison_easy"  # for CIFAR-10
