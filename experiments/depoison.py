@@ -18,8 +18,8 @@ import argparse
 from dataclasses import asdict
 from meta_transformer.train import Updater, Logger
 from meta_transformer.data import data_iterator, split_data
-from augmentations import permute_checkpoint
-#permute_checkpoint = lambda *args, **kwargs: [None]
+#from augmentations import permute_checkpoint
+permute_checkpoint = lambda *args, **kwargs: [None]
 
 VAL_DATA_RATIO = 0.1
 DATA_STD = 0.0582  # for CIFAR-10
@@ -146,6 +146,7 @@ if __name__ == "__main__":
     LOG_INTERVAL = 5
     SVHN_DATA = os.path.join(module_path, 'data/david_backdoors/svhn')
     DATA_DIR = os.path.join(module_path, 'data/david_backdoors/cifar10')
+    #DATA_DIR = "/rds/user/lsl38/rds-dsk-lab-eWkDxBhxBrQ/model-zoo/cifar10_nodropout"  # for HPC
     #DATA_DIR = os.path.join(module_path, 'data/david_backdoors/mnist/models')
     INPUTS_DIRNAME = "poison_easy"  # for CIFAR-10
     #INPUTS_DIRNAME = "poison"  # for MNIST
