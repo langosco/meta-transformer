@@ -1,5 +1,5 @@
 import os
-#os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.75"  # preallocate a bit less memory so we can use pytorch next to jax
+#os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.6"  # preallocate a bit less memory so we can use pytorch next to jax
 
 from time import time
 import jax
@@ -136,6 +136,8 @@ if __name__ == "__main__":
 #    parser.add_argument('--num_heads', type=int, help='Number of heads', default=16)
 #    parser.add_argument('--num_layers', type=int, help='Number of layers', default=24)
     parser.add_argument('--dropout_rate', type=float, help='Dropout rate', default=0.05)
+    parser.add_argument('--save_checkpoint', action='store_true', 
+            help='Save checkpoint at the end of training')
     args = parser.parse_args()
 
     rng = random.PRNGKey(42)
@@ -277,7 +279,7 @@ if __name__ == "__main__":
     base_test_td = torch_utils.load_cifar10_test_data()
 
     base_poisoned_td = poison.poison_set(base_test_td, train=False, cfg=cfg)
-    base_data_poisoned, base_labels_poisoned, _ = base_poisoned_td.tensors
+    base_data_poisoned, base_labels_poisoned = base_poisoned_td.tensors
     base_data_clean, base_labels_clean = base_test_td.tensors
 
 
@@ -321,6 +323,7 @@ if __name__ == "__main__":
 
     # Training loop
     start = time()
+    max_runtime_reached = False
     for epoch in range(args.epochs):
         rng, subkey = random.split(rng)
 
@@ -351,6 +354,8 @@ if __name__ == "__main__":
         val_metrics_means = jax.tree_map(lambda *x: np.mean(x), *valdata)
         val_metrics_means.update({"epoch": epoch, "step": state.step})
         logger.log(state, val_metrics_means, force_log=True)
+        if max_runtime_reached:
+            break
 
 
         # Train
@@ -363,9 +368,10 @@ if __name__ == "__main__":
             if time() - start > args.max_runtime * 60:
                 print("=======================================")
                 print("Max runtime reached. Stopping training.")
-                print()
-                break
+                print("Computing final validation metrics:")
+                max_runtime_reached = True
 
 
 # save checkpoint when training is done
-# utils.save_checkpoint(state.params, name=f"depoison_run_{int(time())}")
+if args.save_checkpoint:
+    utils.save_checkpoint(state.params, name=f"depoison_run_{int(time())}")

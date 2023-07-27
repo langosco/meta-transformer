@@ -18,5 +18,7 @@ setup(name='meta-transformer',
         "torch",
         "torchvision",
         "pillow",
+        "einops",
+#        "augmentations"
         ],
     )
