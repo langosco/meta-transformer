@@ -4,13 +4,17 @@ import os
 from typing import Dict, Tuple
 import numpy as np
 import einops
+from meta_transformer import module_path
+import gen_models
+import copy
 
 # Collection of utility functions for loading pytorch checkpoints as dicts
 # of np.arrays (e.g. for use with jax).
 
 
 def load_model(model: nn.Module, path: str) -> nn.Module:
-    """Load a pytorch model from a checkpoint."""
+    """Load a pytorch model from a checkpoint.
+    Stateful! ie it changes model."""
     model.load_state_dict(torch.load(path))
     return model
 
@@ -34,14 +38,15 @@ def get_param_dict(model: torch.nn.Module) -> Tuple[Dict, callable]:
             
     def get_pytorch_model(params: dict) -> torch.nn.Module:
         """Map params back to a pytorch model (the inverse)."""
+        model_new = copy.deepcopy(model)
         j = 0
-        for c in model.children():
+        for c in model_new.children():
             for layer in c:
                 if isinstance(layer, (nn.Conv2d, nn.Linear)):
                     layer.weight = nn.Parameter(torch.from_numpy(params[f'{layer._get_name()}_{j}']['w']))
                     layer.bias = nn.Parameter(torch.from_numpy(params[f'{layer._get_name()}_{j}']['b']))
                     j += 1
-        return model
+        return model_new
 
     return params, get_pytorch_model
 
@@ -195,24 +200,46 @@ def get_loss(model: nn.Module, inputs: torch.Tensor, targets: torch.Tensor) -> f
         return loss.item()
 
 
-def load_mnist_test_data():
-    dataset = datasets.load_dataset('mnist')
-    dataset = dataset.with_format("torch")
+#def load_mnist_test_data():
+#    dataset = datasets.load_dataset('mnist')
+#    dataset = dataset.with_format("torch")
+#
+#    test_data, test_labels = dataset['test']["image"], dataset['test']["label"]
+#    test_data = einops.rearrange(test_data, 'b h w -> b 1 h w') / 255.
+#    test_data, test_labels = test_data.to('cuda'), test_labels.to('cuda')
+#    test_data, test_labels = test_data.contiguous(), test_labels.contiguous()
+#    return TensorDataset(test_data, test_labels)
+#
+#
+#def load_cifar10_test_data():
+#    dataset = datasets.load_dataset('cifar10')
+#    dataset = dataset.with_format("torch")
+#
+#    test_data, test_labels = dataset['test']["img"], dataset['test']["label"]
+#    test_data = einops.rearrange(test_data, 'b h w c -> b c h w') / 255.
+#    test_data, test_labels = test_data.to('cuda'), test_labels.to('cuda')
+#    test_data, test_labels = test_data.contiguous(), test_labels.contiguous()
+#    return TensorDataset(test_data, test_labels)
 
-    test_data, test_labels = dataset['test']["image"], dataset['test']["label"]
-    test_data = einops.rearrange(test_data, 'b h w -> b 1 h w') / 255.
-    test_data, test_labels = test_data.to('cuda'), test_labels.to('cuda')
-    test_data, test_labels = test_data.contiguous(), test_labels.contiguous()
-    return TensorDataset(test_data, test_labels)
+
+def load_mnist_test_data():
+    cfg = gen_models.config.Config(dataset="MNIST", datadir=DATA_DIR)
+    _, test = gen_models.utils.init_datasets(cfg)
+    return TensorDataset(*[t.to('cuda') for t in test.tensors])
 
 
 def load_cifar10_test_data():
-    dataset = datasets.load_dataset('cifar10')
-    dataset = dataset.with_format("torch")
+    cfg = gen_models.config.Config(dataset="CIFAR10", datadir=DATA_DIR)
+    _, test = gen_models.utils.init_datasets(cfg)
+    return TensorDataset(*[t.to('cuda') for t in test.tensors])
 
-    test_data, test_labels = dataset['test']["img"], dataset['test']["label"]
-    test_data = einops.rearrange(test_data, 'b h w c -> b c h w') / 255.
+
+DATA_DIR = os.path.join(module_path, 'data')
+def load_svhn_test_data():
+    cfg = gen_models.config.Config(dataset="SVHN", datadir=DATA_DIR)
+    _, svhn_test = gen_models.utils.init_datasets(cfg)
+    test_data, test_labels = svhn_test.tensors
+
     test_data, test_labels = test_data.to('cuda'), test_labels.to('cuda')
     test_data, test_labels = test_data.contiguous(), test_labels.contiguous()
     return TensorDataset(test_data, test_labels)
-
