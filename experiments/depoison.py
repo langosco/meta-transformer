@@ -22,6 +22,8 @@ from meta_transformer.data import data_iterator, split_data
 permute_checkpoint = lambda *args, **kwargs: [None]
 
 VAL_DATA_RATIO = 0.1
+
+# STD of model weights for CNNs
 DATA_STD = 0.0582  # for CIFAR-10
 # DATA_STD = 0.0586  # for MNIST - similar enough
 
@@ -83,7 +85,7 @@ def process_nets(nets: List[dict],
 
 
 def process_batch(batch: dict, seed: int, augment: bool = True) -> dict:
-    """Process a batch of nets."""
+    """process a batch of nets."""
     inputs = process_nets(batch["input"], seed, augment=augment)
     targets = process_nets(batch["target"], seed, augment=augment)
     return dict(input=inputs, target=targets)
@@ -138,33 +140,49 @@ if __name__ == "__main__":
     parser.add_argument('--dropout_rate', type=float, help='Dropout rate', default=0.05)
     parser.add_argument('--save_checkpoint', action='store_true', 
             help='Save checkpoint at the end of training')
+    parser.add_argument('--dataset', type=str, default='mnist')
     args = parser.parse_args()
+
+    args.dataset = args.dataset.lower()
 
     rng = random.PRNGKey(42)
 
     FILTER = False
     LOG_INTERVAL = 5
-    SVHN_DATA = os.path.join(module_path, 'data/david_backdoors/svhn')
-    DATA_DIR = os.path.join(module_path, 'data/david_backdoors/cifar10')
+
+    model_dataset_paths = {
+        "mnist": os.path.join(module_path, 'data/david_backdoors/mnist/models'),
+        "cifar10": os.path.join(module_path, 'data/david_backdoors/cifar10'),
+        "svhn": os.path.join(module_path, 'data/david_backdoors/svhn'),
+    }
+    # on cluster:
     #DATA_DIR = "/rds/user/lsl38/rds-dsk-lab-eWkDxBhxBrQ/model-zoo/cifar10_nodropout"  # for HPC
     #DATA_DIR = os.path.join(module_path, 'data/david_backdoors/mnist/models')
-    INPUTS_DIRNAME = "poison_easy"  # for CIFAR-10
-    #INPUTS_DIRNAME = "poison"  # for MNIST
+
+    inputs_dirnames = {
+        "mnist": "poison",
+        "cifar10": "poison_easy",
+        "svhn": "poison",
+    }
     TARGETS_DIRNAME = "clean"
 
-    architecture = torch_utils.CNNMedium()  # for CIFAR-10
-#    architecture = torch_utils.CNNSmall()  # for MNIST
+    if args.dataset == "mnist":
+        architecture = torch_utils.CNNSmall()  # for MNIST
+    elif args.dataset == "cifar10" or args.dataset == "svhn":
+        architecture = torch_utils.CNNMedium()  # for CIFAR-10
+    else:
+        raise ValueError("Unknown dataset.")
 
     NOTES = ""
-    TAGS = ["CIFAR-10"]
+    TAGS = [args.dataset]
 
     # Load model checkpoints
     print("Loading data...")
     inputs, targets, get_pytorch_model = torch_utils.load_input_and_target_weights(
         model=architecture,
         num_models=args.ndata, 
-        data_dir=DATA_DIR,
-        inputs_dirname=INPUTS_DIRNAME,
+        data_dir=model_dataset_paths[args.dataset],
+        inputs_dirname=inputs_dirnames[args.dataset],
     )
 
     if FILTER:
@@ -195,7 +213,7 @@ if __name__ == "__main__":
             "weight_decay": args.wd,
             "batchsize": args.bs,
             "num_epochs": args.epochs,
-            "dataset": DATA_DIR,
+            "dataset": args.dataset,
             "model_config": asdict(model_config),
             "num_datapoints": args.ndata,
             "adam/b1": args.adam_b1,
@@ -276,8 +294,7 @@ if __name__ == "__main__":
     )
 
 
-#    base_test_td = torch_utils.load_mnist_test_data()
-    base_test_td = torch_utils.load_cifar10_test_data()
+    base_test_td = torch_utils.load_test_data(dataset=args.dataset.upper())
 
     base_poisoned_td = poison.poison_set(base_test_td, train=False, cfg=cfg)
     base_data_poisoned, base_labels_poisoned = base_poisoned_td.tensors
@@ -360,7 +377,6 @@ if __name__ == "__main__":
 
 
         # Train
-        print("Training...")
         for batch in train_loader:
             validate_shapes(batch)
             state, train_metrics = updater.update(state, batch)
@@ -375,4 +391,6 @@ if __name__ == "__main__":
 
 # save checkpoint when training is done
 if args.save_checkpoint:
-    utils.save_checkpoint(state.params, name=f"depoison_run_{int(time())}")
+    checkpoints_dir = utils.CHECKPOINTS_DIR / args.dataset
+    print("Saving checkpoint...")
+    utils.save_checkpoint(state.params, name=f"depoison_run_{int(time())}", path=checkpoints_dir)
