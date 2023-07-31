@@ -222,24 +222,10 @@ def get_loss(model: nn.Module, inputs: torch.Tensor, targets: torch.Tensor) -> f
 #    return TensorDataset(test_data, test_labels)
 
 
-def load_mnist_test_data():
-    cfg = gen_models.config.Config(dataset="MNIST", datadir=DATA_DIR)
-    _, test = gen_models.utils.init_datasets(cfg)
-    return TensorDataset(*[t.to('cuda') for t in test.tensors])
-
-
-def load_cifar10_test_data():
-    cfg = gen_models.config.Config(dataset="CIFAR10", datadir=DATA_DIR)
-    _, test = gen_models.utils.init_datasets(cfg)
-    return TensorDataset(*[t.to('cuda') for t in test.tensors])
-
-
 DATA_DIR = os.path.join(module_path, 'data')
-def load_svhn_test_data():
-    cfg = gen_models.config.Config(dataset="SVHN", datadir=DATA_DIR)
-    _, svhn_test = gen_models.utils.init_datasets(cfg)
-    test_data, test_labels = svhn_test.tensors
 
-    test_data, test_labels = test_data.to('cuda'), test_labels.to('cuda')
-    test_data, test_labels = test_data.contiguous(), test_labels.contiguous()
-    return TensorDataset(test_data, test_labels)
+
+def load_test_data(dataset="MNIST"):
+    cfg = gen_models.config.Config(dataset=dataset, datadir=DATA_DIR)
+    _, test = gen_models.utils.init_datasets(cfg)
+    return TensorDataset(*[t.to('cuda') for t in test.tensors])
