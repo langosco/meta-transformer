@@ -4,7 +4,7 @@ import os
 from typing import Dict, Tuple
 import numpy as np
 import einops
-from meta_transformer import module_path
+from meta_transformer import module_path, on_cluster
 import gen_models
 import copy
 
@@ -222,8 +222,10 @@ def get_loss(model: nn.Module, inputs: torch.Tensor, targets: torch.Tensor) -> f
 #    return TensorDataset(test_data, test_labels)
 
 
-DATA_DIR = os.path.join(module_path, 'data')
-
+if on_cluster:
+    DATA_DIR = os.path.join(module_path, 'data', 'vision-data-cache')
+else:
+    DATA_DIR = "/rds/user/lsl38/rds-dsk-lab-eWkDxBhxBrQ/lauro/vision-data-cache"
 
 def load_test_data(dataset="MNIST"):
     cfg = gen_models.config.Config(dataset=dataset, datadir=DATA_DIR)

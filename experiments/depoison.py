@@ -10,7 +10,7 @@ import haiku as hk
 import optax
 from typing import Mapping, Any, Tuple, List, Iterator, Optional, Dict
 from jax.typing import ArrayLike
-from meta_transformer import utils, preprocessing, torch_utils, module_path
+from meta_transformer import utils, preprocessing, torch_utils, module_path, on_cluster, output_dir
 from meta_transformer.meta_model import create_meta_model
 from meta_transformer.meta_model import MetaModelConfig as ModelConfig
 import wandb
@@ -18,6 +18,7 @@ import argparse
 from dataclasses import asdict
 from meta_transformer.train import Updater, Logger
 from meta_transformer.data import data_iterator, split_data
+from etils import epath
 #from augmentations import permute_checkpoint
 permute_checkpoint = lambda *args, **kwargs: [None]
 
@@ -152,20 +153,28 @@ if __name__ == "__main__":
     FILTER = False
     LOG_INTERVAL = 5
 
+
+    if not on_cluster:
+        dpath = os.path.join(module_path, "data/david_backdoors")
+    else:
+        dpath = "/rds/user/lsl38/rds-dsk-lab-eWkDxBhxBrQ/model-zoo/"  
+
     model_dataset_paths = {
-        "mnist": os.path.join(module_path, 'data/david_backdoors/mnist/models'),
-        "cifar10": os.path.join(module_path, 'data/david_backdoors/cifar10'),
-        "svhn": os.path.join(module_path, 'data/david_backdoors/svhn'),
+        "mnist": "mnist-cnns",
+        "cifar10": "cifar10",
+        "svhn": "svhn",
     }
-    # on cluster:
-    #DATA_DIR = "/rds/user/lsl38/rds-dsk-lab-eWkDxBhxBrQ/model-zoo/cifar10_nodropout"  # for HPC
-    #DATA_DIR = os.path.join(module_path, 'data/david_backdoors/mnist/models')
+
+    model_dataset_paths = {
+        k: os.path.join(dpath, v) for k, v in model_dataset_paths.items()
+    }
 
     inputs_dirnames = {
         "mnist": "poison",
         "cifar10": "poison_easy",
         "svhn": "poison",
     }
+
     TARGETS_DIRNAME = "clean"
     INPUTS_DIRNAME = args.inputs_dirname if args.inputs_dirname is not None else inputs_dirnames[args.dataset]
 
@@ -395,6 +404,6 @@ if __name__ == "__main__":
 
 # save checkpoint when training is done
 if args.save_checkpoint:
-    checkpoints_dir = utils.CHECKPOINTS_DIR / args.dataset
     print("Saving checkpoint...")
-    utils.save_checkpoint(state.params, name=f"depoison_run_{int(time())}", path=checkpoints_dir)
+    checkpoints_dir = epath.Path(output_dir) / "mm-checkpoints" / "depoison" / args.dataset
+    utils.save_checkpoint(state.params, name=f"run_{int(time())}", path=checkpoints_dir)
