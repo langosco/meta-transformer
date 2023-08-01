@@ -10,7 +10,7 @@ import haiku as hk
 import optax
 from typing import Mapping, Any, Tuple, List, Iterator, Optional, Dict
 from jax.typing import ArrayLike
-from meta_transformer import utils, preprocessing, torch_utils, module_path
+from meta_transformer import utils, preprocessing, torch_utils, module_path, on_cluster
 from meta_transformer.meta_model import create_meta_model
 from meta_transformer.meta_model import MetaModelConfig as ModelConfig
 import wandb
@@ -150,20 +150,28 @@ if __name__ == "__main__":
     FILTER = False
     LOG_INTERVAL = 5
 
+
+    if not on_cluster:
+        dpath = os.path.join(module_path, "data/david_backdoors")
+    else:
+        dpath = "/rds/user/lsl38/rds-dsk-lab-eWkDxBhxBrQ/model-zoo/"  
+
     model_dataset_paths = {
-        "mnist": os.path.join(module_path, 'data/david_backdoors/mnist/models'),
-        "cifar10": os.path.join(module_path, 'data/david_backdoors/cifar10'),
-        "svhn": os.path.join(module_path, 'data/david_backdoors/svhn'),
+        "mnist": "mnist-cnns",
+        "cifar10": "cifar10",
+        "svhn": "svhn",
     }
-    # on cluster:
-    #DATA_DIR = "/rds/user/lsl38/rds-dsk-lab-eWkDxBhxBrQ/model-zoo/cifar10_nodropout"  # for HPC
-    #DATA_DIR = os.path.join(module_path, 'data/david_backdoors/mnist/models')
+
+    model_dataset_paths = {
+        k: os.path.join(dpath, v) for k, v in model_dataset_paths.items()
+    }
 
     inputs_dirnames = {
         "mnist": "poison",
         "cifar10": "poison_easy",
         "svhn": "poison",
     }
+
     TARGETS_DIRNAME = "clean"
 
     if args.dataset == "mnist":
