@@ -32,7 +32,7 @@ def acc_from_outputs(outputs, targets):
     return None
 
 
-def loss_from_outputs(outputs, targets):
+def loss_from_outputs(outputs: ArrayLike, targets: ArrayLike) -> float:
     """MSE between flattened trees"""
     return jnp.mean((outputs - targets)**2)
 
@@ -141,6 +141,8 @@ if __name__ == "__main__":
     parser.add_argument('--save_checkpoint', action='store_true', 
             help='Save checkpoint at the end of training')
     parser.add_argument('--dataset', type=str, default='mnist')
+    parser.add_argument('--tags', nargs='*', type=str, default=[])
+    parser.add_argument('--inputs_dirname', type=str, default=None)
     args = parser.parse_args()
 
     args.dataset = args.dataset.lower()
@@ -165,6 +167,7 @@ if __name__ == "__main__":
         "svhn": "poison",
     }
     TARGETS_DIRNAME = "clean"
+    INPUTS_DIRNAME = args.inputs_dirname if args.inputs_dirname is not None else inputs_dirnames[args.dataset]
 
     if args.dataset == "mnist":
         architecture = torch_utils.CNNSmall()  # for MNIST
@@ -206,7 +209,7 @@ if __name__ == "__main__":
     wandb.init(
         mode="online" if args.use_wandb else "disabled",
         project="meta-models-depoison",
-        tags=["testing-sweep"],
+        tags=args.tags,
         config={
             "dataset": "MNIST-meta",
             "lr": args.lr,
@@ -214,6 +217,7 @@ if __name__ == "__main__":
             "batchsize": args.bs,
             "num_epochs": args.epochs,
             "dataset": args.dataset,
+            "inputs_dirname": INPUTS_DIRNAME,
             "model_config": asdict(model_config),
             "num_datapoints": args.ndata,
             "adam/b1": args.adam_b1,
