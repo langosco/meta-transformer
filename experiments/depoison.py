@@ -147,6 +147,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     args.dataset = args.dataset.lower()
+    args.tags.append("HPC" if on_cluster else "local")
 
     rng = random.PRNGKey(42)
 
@@ -170,9 +171,9 @@ if __name__ == "__main__":
     }
 
     inputs_dirnames = {
-        "mnist": "poison",
-        "cifar10": "poison_easy",
-        "svhn": "poison",
+        "mnist": "poison_noL1reg",
+        "cifar10": "poison_noL1",
+        "svhn": "poison_noL1",
     }
 
     TARGETS_DIRNAME = "clean"
