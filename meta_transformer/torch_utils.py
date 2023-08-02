@@ -223,9 +223,9 @@ def get_loss(model: nn.Module, inputs: torch.Tensor, targets: torch.Tensor) -> f
 
 
 if on_cluster:
-    DATA_DIR = os.path.join(module_path, 'data', 'vision-data-cache')
-else:
     DATA_DIR = "/rds/user/lsl38/rds-dsk-lab-eWkDxBhxBrQ/lauro/vision-data-cache"
+else:
+    DATA_DIR = os.path.join(module_path, 'data', 'vision-data-cache')
 
 def load_test_data(dataset="MNIST"):
     cfg = gen_models.config.Config(dataset=dataset, datadir=DATA_DIR)
