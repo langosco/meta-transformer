@@ -8,6 +8,20 @@ import jax
 import chex
 
 
+attn_default_init = nn.initializers.variance_scaling(
+    scale=2.0 / 24 * 0.4**2, # !?!
+#    scale=0.02,
+    mode="fan_in",  # change?
+    distribution="truncated_normal",
+)
+
+dense_default_init = nn.initializers.variance_scaling(
+#    scale=0.3**2,  # !?
+    scale=0.02,
+    mode="fan_in",  # change?
+    distribution="uniform",
+)
+
 class TransformerBlock(nn.Module):
     num_heads: int
     d_model: int  # d_model = num_heads * key_size
@@ -22,16 +36,19 @@ class TransformerBlock(nn.Module):
         mask: jax.Array = None,
         is_training: bool = True,
     ) -> jax.Array:
+
+        # TODO: since hk implementation used to divide by num_layers (typically 24),
+        # I've divided by 24 here as well. I'll keep it for the first test run to
+        # properly compare against the hk implementation, but remove it afterwards.
+#        init_fn = lambda rng, shape, dtype: nn.initializers.variance_scaling(
+#            scale=2.0/24,
+#            mode="fan_in",  # change?
+#            distribution="truncated_normal",
+#        )(rng, shape, dtype) * 0.87962566103423980   # Lauro: multiply by .88 to reduce std to match haiku's default
+
         self_attention = nn.SelfAttention(
             num_heads=self.num_heads,
-            kernel_init=nn.initializers.variance_scaling(
-                scale=2.0/24,
-                mode="fan_in",  # change?
-                distribution="truncated_normal",
-            ),
-            # TODO: since hk implementation used to divide by num_layers (typically 24),
-            # I've divided by 24 here as well. I'll keep it for the first test run to
-            # properly compare against the hk implementation, but remove it afterwards.
+            kernel_init=attn_default_init,
         )
 
         residual = x
@@ -42,9 +59,9 @@ class TransformerBlock(nn.Module):
 
         residual = x
         x = nn.LayerNorm()(x)
-        x = nn.Dense(self.widening_factor * self.d_model)(x)
+        x = nn.Dense(self.widening_factor * self.d_model, kernel_init=dense_default_init)(x)
         x = nn.gelu(x)
-        x = nn.Dense(self.d_model)(x)
+        x = nn.Dense(self.d_model, kernel_init=dense_default_init)(x)
         x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=not is_training)
         x = x + residual
 
