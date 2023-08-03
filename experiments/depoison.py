@@ -157,6 +157,10 @@ if __name__ == "__main__":
 
     if not on_cluster:
         dpath = os.path.join(module_path, "data/david_backdoors")
+
+        # use for testing with small dataset sizes (only works if rds storage is mounted):
+#        dpath = os.path.join(module_path, "/home/lauro/rds/model-zoo/")  
+
     else:
         dpath = "/rds/user/lsl38/rds-dsk-lab-eWkDxBhxBrQ/model-zoo/"  
 
