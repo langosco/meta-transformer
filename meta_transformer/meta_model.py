@@ -10,12 +10,12 @@ from jax.typing import ArrayLike
 @dataclasses.dataclass
 class MetaModelClassifier(nn.Module):
     """A simple meta-model."""
+    num_classes: int
     d_model: int
     num_heads: int
     num_layers: int
     dropout_rate: int
     widening_factor: int = 4
-    num_classes: int
     name: Optional[str] = None
     use_embedding: Optional[bool] = False
 
