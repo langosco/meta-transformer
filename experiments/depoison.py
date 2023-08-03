@@ -156,16 +156,15 @@ if __name__ == "__main__":
 
 
     if not on_cluster:
-        dpath = os.path.join(module_path, "data/david_backdoors")
-
+        dpath = os.path.join(module_path, "data/david_backdoors")  # local
         # use for testing with small dataset sizes (only works if rds storage is mounted):
-#        dpath = os.path.join(module_path, "/home/lauro/rds/model-zoo/")  
-
+        # dpath = os.path.join(module_path, "/home/lauro/rds/model-zoo/")
     else:
         dpath = "/rds/user/lsl38/rds-dsk-lab-eWkDxBhxBrQ/model-zoo/"  
 
     model_dataset_paths = {
         "mnist": "mnist-cnns",
+        #"mnist": "mnist/models",  # old mnist checkpoints
         "cifar10": "cifar10",
         "svhn": "svhn",
     }
@@ -176,6 +175,7 @@ if __name__ == "__main__":
 
     inputs_dirnames = {
         "mnist": "poison_noL1reg",
+        #"mnist": "poison",
         "cifar10": "poison_noL1",
         "svhn": "poison_noL1",
     }
