@@ -25,12 +25,12 @@ class TransformerBlock(nn.Module):
         self_attention = nn.SelfAttention(
             num_heads=self.num_heads,
             kernel_init=nn.initializers.variance_scaling(
-                scale=2.0/16,
+                scale=2.0/24,
                 mode="fan_in",  # change?
                 distribution="truncated_normal",
             ),
-            # TODO: since hk implementation used to divide by num_layers (typically 16),
-            # I've divided by 16 here as well. I'll keep it for the first test run to
+            # TODO: since hk implementation used to divide by num_layers (typically 24),
+            # I've divided by 24 here as well. I'll keep it for the first test run to
             # properly compare against the hk implementation, but remove it afterwards.
         )
 
