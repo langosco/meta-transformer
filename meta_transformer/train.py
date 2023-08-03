@@ -1,13 +1,13 @@
 import jax
 from jax import random, jit, value_and_grad
 import jax.numpy as jnp
-import haiku as hk
 import optax
 import chex
 import functools
 from typing import Mapping, Any, Tuple, List, Iterator, Optional
 from jax.typing import ArrayLike
 import wandb
+import flax.linen as nn
 
 
 # Optimizer and update function
@@ -23,7 +23,7 @@ class TrainState:
 class Updater: # Could also make this a function of loss_fn, model.apply, etc if we want to be flexible
     """Holds training methods. All methods are jittable."""
     opt: optax.GradientTransformation
-    model: hk.TransformedWithState
+    model: nn.Module
     loss_fn: callable
 
     # TODO this is hardcoded to val
@@ -38,7 +38,7 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
     def init_params(self, rng: ArrayLike, data: dict) -> dict:
         """Initializes state of the updater."""
         out_rng, subkey = jax.random.split(rng)
-        params = self.model.init(subkey, data["input"])
+        params = self.model.init(subkey, data["input"], is_training=False)
         opt_state = self.opt.init(params)
         return TrainState(
             step=0,

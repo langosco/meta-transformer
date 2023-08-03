@@ -3,16 +3,13 @@ import os
 
 from time import time
 import jax
-from jax import random, jit, value_and_grad, nn
 import jax.numpy as jnp
 import numpy as np
-import haiku as hk
 import optax
-from typing import Mapping, Any, Tuple, List, Iterator, Optional, Dict
+from typing import List, Dict
 from jax.typing import ArrayLike
 from meta_transformer import utils, preprocessing, torch_utils, module_path, on_cluster, output_dir
-from meta_transformer.meta_model import create_meta_model
-from meta_transformer.meta_model import MetaModelConfig as ModelConfig
+from meta_transformer.meta_model import MetaModel
 import wandb
 import argparse
 from dataclasses import asdict
@@ -41,13 +38,18 @@ def loss_from_outputs(outputs: ArrayLike, targets: ArrayLike) -> float:
 def create_loss_fn(model_forward: callable):
     """model_forward = model.apply if model is a hk.transform"""
     def loss_fn(
-            params: dict, 
+            params: dict,
             rng: ArrayLike,
-            data: Dict[str, ArrayLike], 
+            data: Dict[str, ArrayLike],
             is_training: bool = True
         ):
-        """data is a dict with keys 'input' and 'target'."""
-        outputs = model_forward(params, rng, data["input"], is_training)
+        """- data: dict with keys 'input' and 'target'."""
+        outputs = model_forward(
+            params, 
+            data["input"], 
+            is_training=is_training,
+            rngs={"dropout": rng},
+        )
         loss = loss_from_outputs(outputs, data["target"])
         aux = {"outputs": outputs, "metrics": {}}
         return loss, aux
@@ -156,10 +158,9 @@ if __name__ == "__main__":
 
 
     if not on_cluster:
-        dpath = os.path.join(module_path, "data/david_backdoors")
-
+        # dpath = os.path.join(module_path, "data/david_backdoors")  # local
         # use for testing with small dataset sizes (only works if rds storage is mounted):
-#        dpath = os.path.join(module_path, "/home/lauro/rds/model-zoo/")  
+        dpath = os.path.join(module_path, "/home/lauro/rds/model-zoo/")
 
     else:
         dpath = "/rds/user/lsl38/rds-dsk-lab-eWkDxBhxBrQ/model-zoo/"  
@@ -211,14 +212,13 @@ if __name__ == "__main__":
 
 
     # Meta-Model Initialization
-    model_config = ModelConfig(
-        model_size=args.d_model,
+    model = MetaModel(
+        d_model=args.d_model,
         num_heads=int(args.d_model / 64),
         num_layers=int(args.d_model / 42),
         dropout_rate=args.dropout_rate,
         use_embedding=args.use_embedding,
     )
-
 
     wandb.init(
         mode="online" if args.use_wandb else "disabled",
@@ -232,7 +232,7 @@ if __name__ == "__main__":
             "num_epochs": args.epochs,
             "dataset": args.dataset,
             "inputs_dirname": INPUTS_DIRNAME,
-            "model_config": asdict(model_config),
+            "model_config": asdict(model),
             "num_datapoints": args.ndata,
             "adam/b1": args.adam_b1,
             "adam/b2": args.adam_b2,
@@ -283,7 +283,6 @@ if __name__ == "__main__":
 #        return args.lr * (1 - step // decay_steps)
     
     opt = optimizer(lr=schedule, wd=args.wd)
-    model = create_meta_model(model_config)
     loss_fn = create_loss_fn(model.apply)
     updater = Updater(opt=opt, model=model, loss_fn=loss_fn)
     logger = Logger(log_interval=LOG_INTERVAL)

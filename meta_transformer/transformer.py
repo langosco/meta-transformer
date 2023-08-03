@@ -1,91 +1,81 @@
-"""Base Transformer.
-
-Glossary of shapes:
-- B: Batch size.
-- T: Sequence length.
-- D: Model embedding size = d_model.
-- H: Number of attention heads.
+"""
+A simple base transformer class.
 """
 
-import dataclasses
 from typing import Optional
-
-import haiku as hk
+import flax.linen as nn
 import jax
-import jax.numpy as jnp
-import numpy as np
 import chex
 
 
-def layer_norm(x: jax.Array) -> jax.Array:
-  """Applies a unique LayerNorm to x with default settings."""
-  ln = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)
-  return ln(x)
+class TransformerBlock(nn.Module):
+    num_heads: int
+    d_model: int  # d_model = num_heads * key_size
+    dropout_rate: float
+    widening_factor: int = 4
+    name: Optional[str] = None
+
+    @nn.compact
+    def __call__(
+        self,
+        x,
+        mask: jax.Array = None,
+        is_training: bool = True,
+    ) -> jax.Array:
+        self_attention = nn.SelfAttention(
+            num_heads=self.num_heads,
+            kernel_init=nn.initializers.variance_scaling(
+                scale=2.0/16,
+                mode="fan_in",  # change?
+                distribution="truncated_normal",
+            ),
+            # TODO: since hk implementation used to divide by num_layers (typically 16),
+            # I've divided by 16 here as well. I'll keep it for the first test run to
+            # properly compare against the hk implementation, but remove it afterwards.
+        )
+
+        residual = x
+        x = nn.LayerNorm()(x)
+        x = self_attention(x, mask=mask)  # can include mask=mask argument here
+        x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=not is_training)
+        x = x + residual
+
+        residual = x
+        x = nn.LayerNorm()(x)
+        x = nn.Dense(self.widening_factor * self.d_model)(x)
+        x = nn.gelu(x)
+        x = nn.Dense(self.d_model)(x)
+        x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=not is_training)
+        x = x + residual
+
+        return x
 
 
-@chex.dataclass
-class TransformerConfig:
-    """Hyperparameters for the model."""
-    num_heads: int = 4
-    num_layers: int = 2
-    dropout_rate: float = 0.1
-    model_size: int = 128
+class Transformer(nn.Module):
+    num_heads: int
+    num_layers: int
+    d_model: int  # can be inferred from x.shape[-1]
+    dropout_rate: float
+    widening_factor: int = 4
+    name: Optional[str] = None
 
-    def __post_init__(self):
-        self.key_size = self.model_size // self.num_heads
-        if self.model_size % self.num_heads != 0:
-            raise ValueError(
-                f"model_size ({self.model_size}) must be "
-                "divisible by num_heads ({self.num_heads})")
+    @nn.compact
+    def __call__(
+        self,
+        x: jax.Array,  # [batch, seq, dim] (just [seq, dim] also works I think).
+        is_training: bool = True,
+    ) -> jax.Array:
+        """Transforms input embedding sequences to output embedding sequences."""
 
+#        initializer = hk.initializers.VarianceScaling(2 / self.num_layers)
+        chex.assert_shape(x, (None, None, self.d_model))
 
+        for _ in range(self.num_layers):
+            x = TransformerBlock(
+                num_heads=self.num_heads,
+                d_model=self.d_model,
+                dropout_rate=self.dropout_rate,
+                widening_factor=self.widening_factor,
+            )(x, is_training=is_training)
 
-@dataclasses.dataclass
-class Transformer(hk.Module):
-  """A transformer stack."""
-
-  num_heads: int
-  num_layers: int
-  key_size: int  # usually d_model // num_heads
-  dropout_rate: float
-  widening_factor: int = 4
-  name: Optional[str] = None
-
-  def __call__(
-      self,
-      embeddings: jax.Array,  # [B, T, D]
-      *,
-      is_training: bool = True,
-  ) -> jax.Array:  # [B, T, D]
-    """Transforms input embedding sequences to output embedding sequences."""
-
-    initializer = hk.initializers.VarianceScaling(2 / self.num_layers)
-    dropout_rate = self.dropout_rate if is_training else 0.
-    _, _, model_size = embeddings.shape
-
-    h = embeddings
-    for _ in range(self.num_layers):
-      # First the attention block.
-      attn_block = hk.MultiHeadAttention(
-          num_heads=self.num_heads,
-          key_size=self.key_size,
-          model_size=model_size,
-          w_init=initializer,
-      )
-      h_norm = layer_norm(h)
-      h_attn = attn_block(h_norm, h_norm, h_norm)
-      h_attn = hk.dropout(hk.next_rng_key(), dropout_rate, h_attn)
-      h = h + h_attn
-
-      # Then the dense block.
-      dense_block = hk.Sequential([
-          hk.Linear(self.widening_factor * model_size, w_init=initializer),
-          jax.nn.gelu,
-          hk.Linear(model_size, w_init=initializer),
-      ])
-      h_norm = layer_norm(h)
-      h_dense = dense_block(h_norm)
-      h_dense = hk.dropout(hk.next_rng_key(), dropout_rate, h_dense)
-      h = h + h_dense
-
-    return layer_norm(h)
+        return nn.LayerNorm()(x)

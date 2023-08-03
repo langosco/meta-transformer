@@ -1,30 +1,35 @@
-@dataclasses.dataclass
-class Encoder(hk.Module):
+"""
+scratch code for VAE
+"""
+class Encoder(nn.Module):
     latent_dim: int
     hidden_sizes: Optional[Sequence[int]] = None
 
+    @nn.compact
     def __call__(self, x):
-        if self.hidden_sizes is None:
-            self.hidden_sizes = [int(self.latent_dim * 1.5)]
-        layers = []
-        for hidden_size in self.hidden_sizes:
-            layers.append(hk.Linear(hidden_size))
-            layers.append(jax.nn.gelu)
-        layers.append(hk.Linear(self.latent_dim))
-        return hk.Sequential(layers)(x)
+        hidden_sizes = self.hidden_sizes
+        if hidden_sizes is None:
+            hidden_sizes = [int(self.latent_dim * 1.5)]
+
+        for hidden_size in hidden_sizes:
+            x = nn.Dense(hidden_size)(x)
+            x = jax.nn.gelu(x)
+        x = nn.Dense(self.latent_dim)(x)
+        return x
 
 
-@dataclasses.dataclass
-class Decoder(hk.Module):
+class Decoder(nn.Module):
     output_dim: int
     hidden_sizes: Optional[Sequence[int]] = None
 
+    @nn.compact
     def __call__(self, x):
-        if self.hidden_sizes is None:
-            self.hidden_sizes = [int(x[-1] * 1.5)]
-        layers = []
-        for hidden_size in self.hidden_sizes:
-            layers.append(hk.Linear(hidden_size))
-            layers.append(jax.nn.gelu)
-        layers.append(hk.Linear(self.output_dim))
-        return hk.Sequential(layers)(x)
+        hidden_sizes = self.hidden_sizes
+        if hidden_sizes is None:
+            hidden_sizes = [int(x.shape[-1] * 1.5)]
+
+        for hidden_size in hidden_sizes:
+            x = nn.Dense(hidden_size)(x)
+            x = jax.nn.gelu(x)
+        x = nn.Dense(self.output_dim)(x)
+        return x
