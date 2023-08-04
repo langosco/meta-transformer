@@ -36,7 +36,9 @@ def loss_from_outputs(outputs: ArrayLike, targets: ArrayLike) -> float:
 
 
 def create_loss_fn(model_forward: callable):
-    """model_forward = model.apply if model is a hk.transform"""
+    """
+    - model_forward: computes forward fn, e.g. model.apply for flax / haiku.
+    """
     def loss_fn(
             params: dict,
             rng: ArrayLike,
@@ -44,14 +46,17 @@ def create_loss_fn(model_forward: callable):
             is_training: bool = True
         ):
         """- data: dict with keys 'input' and 'target'."""
-        outputs = model_forward(
+        outputs, activation_stats = model_forward(
             params, 
             data["input"], 
             is_training=is_training,
             rngs={"dropout": rng},
         )
         loss = loss_from_outputs(outputs, data["target"])
-        aux = {"outputs": outputs, "metrics": {}}
+        metrics = {f"activation_stats/{k}": v 
+                   for k, v in activation_stats.items()}
+        metrics = utils.flatten_dict(metrics)  # max 1 level dict
+        aux = dict(outputs=outputs, metrics=metrics)
         return loss, aux
     return loss_fn
 
@@ -79,18 +84,24 @@ def augment_list_of_nets(nets: List[dict], seed):
 def process_nets(nets: List[dict], 
                 seed: int,
                 augment: bool = True,
+                data_std: float = DATA_STD,
                 ) -> ArrayLike:
     """Permutation augment, then flatten to arrays."""
     nets = augment_list_of_nets(nets, seed) if augment else nets
     nets = np.stack([preprocessing.preprocess(net, args.chunk_size)[0]
                         for net in nets])
-    return nets / DATA_STD  # TODO this is dependent on dataset!!
+    return nets / data_std  # TODO this is dependent on dataset!!
 
 
-def process_batch(batch: dict, seed: int, augment: bool = True) -> dict:
+def process_batch(
+        batch: dict, 
+        seed: int, 
+        augment: bool = True, 
+        data_std: float = DATA_STD
+    ) -> dict:
     """process a batch of nets."""
-    inputs = process_nets(batch["input"], seed, augment=augment)
-    targets = process_nets(batch["target"], seed, augment=augment)
+    inputs = process_nets(batch["input"], seed, augment=augment, data_std=data_std)
+    targets = process_nets(batch["target"], seed, augment=augment, data_std=data_std)
     return dict(input=inputs, target=targets)
 
 
@@ -203,6 +214,7 @@ if __name__ == "__main__":
         data_dir=model_dataset_paths[args.dataset],
         inputs_dirname=inputs_dirnames[args.dataset],
     )
+    weights_std = jax.flatten_util.ravel_pytree(inputs.tolist())[0].std()
 
     if FILTER:
         inputs, targets = preprocessing.filter_data(inputs, targets)
@@ -247,6 +259,7 @@ if __name__ == "__main__":
     print()
     print(f"Number of training examples: {len(train_inputs)}.")
     print(f"Number of validation examples: {len(val_inputs)}.")
+    print(f"Std of training data: {weights_std}. (Should be around {DATA_STD}).")
     print("Steps per epoch:", steps_per_epoch)
     print("Total number of steps:", steps_per_epoch * args.epochs)
     print()
@@ -292,7 +305,7 @@ if __name__ == "__main__":
         "input": train_inputs[:2],
         "target": train_targets[:2],
     }
-    init_batch = process_batch(init_batch, 0, augment=False)
+    init_batch = process_batch(init_batch, 0, augment=False, data_std=weights_std)
     state = updater.init_params(subkey, init_batch)
 
     print("Number of parameters:",

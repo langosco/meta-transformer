@@ -3,15 +3,9 @@ from typing import Optional
 import jax
 import flax.linen as nn
 
-from meta_transformer.transformer import Transformer
+from meta_transformer.transformer import Transformer, dense_default_init
 from jax.typing import ArrayLike
 
-dense_default_init = nn.initializers.variance_scaling(
-    scale=0.09,  # !?
-#    scale = 0.02,
-    mode="fan_in",  # change?
-    distribution="uniform",
-)
 
 @dataclasses.dataclass
 class MetaModel(nn.Module):
@@ -55,11 +49,11 @@ class MetaModel(nn.Module):
             dropout_rate=self.dropout_rate,
             widening_factor=self.widening_factor,
         )
-        outputs = transformer(inputs, is_training=is_training)
+        outputs, activation_stats = transformer(inputs, is_training=is_training)
 
         if self.use_embedding:
             outputs = nn.Dense(input_shape, kernel_init=dense_default_init)(outputs)
-        return outputs
+        return outputs, activation_stats
 
 
 @dataclasses.dataclass
@@ -98,7 +92,7 @@ class MetaModelClassifier(nn.Module):
 
         # Run the transformer over the inputs.
         # Run the transformer over the inputs.
-        transformer = Transformer(
+        transformer, _ = Transformer(
             d_model=self.d_model,
             num_heads=self.num_heads,
             num_layers=self.num_layers,

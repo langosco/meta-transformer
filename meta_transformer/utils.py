@@ -66,6 +66,17 @@ def tree_to_numpy(tree):
     return jax.tree_map(lambda x: np.array(x), tree)
 
 
+def flatten_dict(d: dict, parent_key: str = '', sep: str = '__') -> dict:
+    flat = {}
+    for k, v in d.items():
+        new_key = parent_key + sep + k if parent_key else k
+        if isinstance(v, dict):
+            flat.update(flatten_dict(v, new_key, sep=sep))
+        else:
+            flat[new_key] = v
+    return flat
+
+
 # Checkpointing
 import orbax.checkpoint
 from etils import epath

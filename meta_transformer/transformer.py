@@ -6,6 +6,7 @@ from typing import Optional
 import flax.linen as nn
 import jax
 import chex
+import jax.numpy as jnp
 
 
 attn_default_init = nn.initializers.variance_scaling(
@@ -17,10 +18,13 @@ attn_default_init = nn.initializers.variance_scaling(
 
 dense_default_init = nn.initializers.variance_scaling(
 #    scale=0.3**2,  # !?
-    scale=0.02,
+    scale=0.09,
     mode="fan_in",  # change?
     distribution="uniform",
 )
+
+def get_activation_stats(x):
+    return {"mean": x.mean(), "std": x.std(), "l1": jnp.abs(x).mean()}
 
 class TransformerBlock(nn.Module):
     num_heads: int
@@ -36,18 +40,21 @@ class TransformerBlock(nn.Module):
         mask: jax.Array = None,
         is_training: bool = True,
     ) -> jax.Array:
+        activations = dict()
 
         self_attention = nn.SelfAttention(
             num_heads=self.num_heads,
             kernel_init=attn_default_init,
         )
 
+        activations["pre_attention"] = get_activation_stats(x)
         residual = x
         x = nn.LayerNorm()(x)
         x = self_attention(x, mask=mask)  # can include mask=mask argument here
         x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=not is_training)
         x = x + residual
 
+        activations["pre_mlp"] = get_activation_stats(x)
         residual = x
         x = nn.LayerNorm()(x)
         x = nn.Dense(self.widening_factor * self.d_model, kernel_init=dense_default_init)(x)
@@ -56,7 +63,7 @@ class TransformerBlock(nn.Module):
         x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=not is_training)
         x = x + residual
 
-        return x
+        return x, activations
 
 
 class Transformer(nn.Module):
@@ -77,13 +84,15 @@ class Transformer(nn.Module):
 
 #        initializer = hk.initializers.VarianceScaling(2 / self.num_layers)
         chex.assert_shape(x, (None, None, self.d_model))
+        activations = dict()
 
-        for _ in range(self.num_layers):
-            x = TransformerBlock(
+        for layer in range(self.num_layers):
+            x, acts = TransformerBlock(
                 num_heads=self.num_heads,
                 d_model=self.d_model,
                 dropout_rate=self.dropout_rate,
                 widening_factor=self.widening_factor,
             )(x, is_training=is_training)
+            activations[f"layer_{layer}"] = acts
 
-        return nn.LayerNorm()(x)
+        return nn.LayerNorm()(x), activations
