@@ -34,17 +34,19 @@ parameters:
 #        min: 1e-10
 #        max: 1e-3
     chunk_size:
-        values: [128, 1024, 2048]
+        value: 1024
     bs:
-        values: [32, 64]
+        values: [16, 32, 64]
     use_embedding:
         value: True
     ndata:
-        value: 23_000
+        value: 23_710
     epochs:
         value: 30
     max_runtime:  # in minutes
-        value: 60
+        value: 120
+    dataset:
+        value: mnist
 command:
     - python3
     - depoison.py

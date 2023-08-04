@@ -136,30 +136,32 @@ if __name__ == "__main__":
     parser.add_argument('--lr', type=float, help='Learning rate', default=2e-5)
     parser.add_argument('--wd', type=float, help='Weight decay', default=5e-4)
     parser.add_argument('--bs', type=int, help='Batch size', default=32)
-    parser.add_argument('--epochs', type=int, help='Number of epochs', 
-                        default=25)
-    parser.add_argument('--use_wandb', action='store_true', help='Use wandb')
-    parser.add_argument('--ndata', type=int, help='Number of data points',
-                        default=1000)
-    parser.add_argument('--use_embedding', type=bool, help='Use embedding', 
-                        default=False)
-    parser.add_argument('--adam_b1', type=float, help='Learning rate', default=0.1)
-    parser.add_argument('--adam_b2', type=float, help='Weight decay', default=0.001)
-    parser.add_argument('--adam_eps', type=float, help='Weight decay', default=1e-8)
-    parser.add_argument('--chunk_size', type=int, help='Chunk size', default=1024)
-    parser.add_argument('--d_model', type=int, help='Model size', default=1024)
-    parser.add_argument('--max_runtime', type=int, help='Max runtime in minutes', default=np.inf)
-#    parser.add_argument('--num_heads', type=int, help='Number of heads', default=16)
-#    parser.add_argument('--num_layers', type=int, help='Number of layers', default=24)
-    parser.add_argument('--dropout_rate', type=float, help='Dropout rate', default=0.05)
-    parser.add_argument('--save_checkpoint', action='store_true', 
-            help='Save checkpoint at the end of training')
-    parser.add_argument('--dataset', type=str, default='mnist')
-    parser.add_argument('--tags', nargs='*', type=str, default=[])
-    parser.add_argument('--inputs_dirname', type=str, default=None)
-    parser.add_argument('--validate_output', action='store_true', help='Validate depoisoning')
     parser.add_argument('--in_factor', type=float, default=1.0, help="muP scale factor for input")
     parser.add_argument('--out_factor', type=float, default=1.0, help="muP scale factor for output")
+
+    parser.add_argument('--chunk_size', type=int, default=1024)
+    parser.add_argument('--d_model', type=int, default=1024)
+    parser.add_argument('--use_embedding', type=bool, default=False)
+    parser.add_argument('--adam_b1', type=float, default=0.1)
+    parser.add_argument('--adam_b2', type=float, default=0.001)
+    parser.add_argument('--adam_eps', type=float, default=1e-8)
+    parser.add_argument('--dropout_rate', type=float, default=0.05)
+
+    parser.add_argument('--max_runtime', type=int, help='Max runtime in minutes', default=np.inf)
+    parser.add_argument('--epochs', type=int, default=25)
+    parser.add_argument('--dataset', type=str, default='mnist')
+    parser.add_argument('--ndata', type=int, help='Number of data points',
+                        default=1000)
+    parser.add_argument('--validate_output', action='store_true', help='Validate depoisoning')
+    parser.add_argument('--save_checkpoint', action='store_true', 
+            help='Save checkpoint at the end of training')
+
+    parser.add_argument('--use_wandb', action='store_true')
+    parser.add_argument('--tags', nargs='*', type=str, default=[])
+
+#    parser.add_argument('--num_heads', type=int, help='Number of heads', default=16)
+#    parser.add_argument('--num_layers', type=int, help='Number of layers', default=24)
+    parser.add_argument('--inputs_dirname', type=str, default=None)
     args = parser.parse_args()
 
     args.dataset = args.dataset.lower()
