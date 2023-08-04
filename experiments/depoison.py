@@ -157,6 +157,7 @@ if __name__ == "__main__":
     parser.add_argument('--dataset', type=str, default='mnist')
     parser.add_argument('--tags', nargs='*', type=str, default=[])
     parser.add_argument('--inputs_dirname', type=str, default=None)
+    parser.add_argument('--validate_output', action='store_true', help='Validate depoisoning')
     args = parser.parse_args()
 
     args.dataset = args.dataset.lower()
@@ -325,11 +326,11 @@ if __name__ == "__main__":
     )
 
 
-    base_test_td = torch_utils.load_test_data(dataset=args.dataset.upper())
-
-    base_poisoned_td = poison.poison_set(base_test_td, train=False, cfg=cfg)
-    base_data_poisoned, base_labels_poisoned = base_poisoned_td.tensors
-    base_data_clean, base_labels_clean = base_test_td.tensors
+    if args.validate_output:
+        base_test_td = torch_utils.load_test_data(dataset=args.dataset.upper())
+        base_poisoned_td = poison.poison_set(base_test_td, train=False, cfg=cfg)
+        base_data_poisoned, base_labels_poisoned = base_poisoned_td.tensors
+        base_data_clean, base_labels_clean = base_test_td.tensors
 
 
     def validate_base(model):  # TODO: reduntant forward passes
@@ -396,8 +397,9 @@ if __name__ == "__main__":
             validate_shapes(batch)
             state, val_metrics, aux = updater.compute_val_metrics(
                 state, batch)
-            rmetrics = get_reconstruction_metrics(aux["outputs"])
-            val_metrics.update(rmetrics)
+            if args.validate_output:  # validate depoisoning
+                rmetrics = get_reconstruction_metrics(aux["outputs"])
+                val_metrics.update(rmetrics)
             valdata.append(val_metrics)
 
         val_metrics_means = jax.tree_map(lambda *x: np.mean(x), *valdata)
