@@ -7,36 +7,44 @@ metric:
 parameters:
     lr:
         distribution: log_uniform_values
-        min: 0.00001
-        max: 0.001
+        min: 1e-5
+        max: 1e-3
     wd:
         distribution: log_uniform_values
-        min: 0.000001
-        max: 0.001
-    adam_b1:
-        distribution: log_uniform_values
-        min: 0.00001
-        max: 0.1
-    adam_b2:
-        distribution: log_uniform_values
-        min: 0.00001
-        max: 0.1
-    adam_eps:
-        distribution: log_uniform_values
-        min: 1e-10
+        min: 1e-6
         max: 1e-3
+    in_factor:
+        distribution: log_uniform_values
+        min: 1e-2
+        max: 1e2
+    out_factor:
+        distribution: log_uniform_values
+        min: 1e-2
+        max: 1e2
+#    adam_b1:
+#        distribution: log_uniform_values
+#        min: 0.00001
+#        max: 0.1
+#    adam_b2:
+#        distribution: log_uniform_values
+#        min: 0.00001
+#        max: 0.1
+#    adam_eps:
+#        distribution: log_uniform_values
+#        min: 1e-10
+#        max: 1e-3
     chunk_size:
-        values: [16, 32, 64, 128, 256, 512, 1024]
+        values: [128, 1024, 2048]
     bs:
         values: [32, 64]
     use_embedding:
         value: True
     ndata:
-        value: 9999
+        value: 23_000
     epochs:
-        value: 100
+        value: 30
     max_runtime:  # in minutes
-        value: 3600
+        value: 60
 command:
     - python3
     - depoison.py
