@@ -1,13 +1,11 @@
-import dataclasses
 from typing import Optional
-import haiku as hk
 import jax
-import jax.numpy as jnp
 from meta_transformer.transformer import Transformer
+import flax.linen as nn
+import einops
 
 
-@dataclasses.dataclass
-class Patches(hk.Module):
+class Patches(nn.Module):
   """A module that extracts patches from an image and flattens them."""
   patch_size: int
   embed_dim: int
@@ -16,19 +14,19 @@ class Patches(hk.Module):
       self,
       image_batch: jax.Array,  # [B, H, W, C]
   ) -> jax.Array:  # [B, T, D]
-    conv = hk.Conv2D(
-        output_channels=self.embed_dim,
-        kernel_shape=self.patch_size,
-        stride=self.patch_size,
+    conv = nn.Conv2D(
+        self.embed_dim,
+        kernel_size=self.patch_size,
+        strides=self.patch_size,
         padding='VALID'
     )
     patches = conv(image_batch)  # [B, H', W', D]
     b, h, w, d = patches.shape
-    return jnp.reshape(patches, [b, h * w, d])
+    #return jnp.reshape(patches, [b, h * w, d])
+    return einops.rearrange("b h w d -> b (h w) d", patches)
 
 
-@dataclasses.dataclass
-class VisionTransformer(hk.Module):
+class VisionTransformer(nn.Module):  # Untested
   """A ViT-style classifier."""
 
   transformer: Transformer
@@ -49,20 +47,17 @@ class VisionTransformer(hk.Module):
     _, seq_len, _ = patches.shape
 
     # Embed the patches and positions.
-    embed_init = hk.initializers.TruncatedNormal(stddev=0.2)
-    embedding = hk.Linear(self.model_size, w_init=embed_init)
+    embed_init = nn.initializers.variance_scaling(
+      scale=0.2, distribution="truncated_normal")
+    embedding = nn.Dense(self.model_size, kernel_init=embed_init)
     patch_embedding = embedding(patches)  # [B, T, D]
 
-    positional_embeddings = hk.get_parameter(
-        'positional_embeddings', [seq_len, self.model_size], init=embed_init)
+    positional_embeddings = self.param(
+        'positional_embeddings',
+        embed_init,
+        (seq_len, self.model_size)
+    )
     input_embeddings = patch_embedding + positional_embeddings  # [B, T, D]
-
-#    # Class Token TODO: ablate this
-#    class_token = hk.get_parameter(
-#        'class_token', [1, 1, self.model_size], init=embed_init)
-#    class_token = jnp.tile(class_token, [input_chunks.shape[0], 1, 1])
-#    input_embeddings = jnp.concatenate([class_token, input_embeddings], axis=1)
-
 
     # Run the transformer over the inputs.
     embeddings = self.transformer(
@@ -71,4 +66,4 @@ class VisionTransformer(hk.Module):
     )  # [B, T, D]
     
     first_out = embeddings[:, 0, :]  # [B, V]
-    return hk.Linear(self.num_classes, name="linear_output")(first_out)  # [B, V]
+    return nn.Dense(self.num_classes, name="linear_output")(first_out)  # [B, V]
