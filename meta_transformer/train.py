@@ -39,6 +39,7 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
         """Initializes state of the updater."""
         out_rng, subkey = jax.random.split(rng)
         params = self.model.init(subkey, data["input"], is_training=False)
+        params = params.unfreeze()  # necessary to work with optax.MultiTransform
         opt_state = self.opt.init(params)
         return TrainState(
             step=0,
@@ -58,11 +59,13 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
         metrics = {
                 "train/loss": loss,
                 "step": state.step,
-                "lr": state.opt_state.hyperparams["lr"],
                 "grad_norm": optax.global_norm(grads),
                 "weight_norm": optax.global_norm(state.params),
         }
         metrics.update({f"train/{k}": v for k, v in aux["metrics"].items()})
+        metrics.update({
+            f"opt/{k}": v for k, v in state.opt_state.hyperparams.items()
+            })
         state.step += 1
         return state, metrics
 

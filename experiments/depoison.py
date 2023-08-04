@@ -9,7 +9,7 @@ import optax
 from typing import List, Dict
 from jax.typing import ArrayLike
 from meta_transformer import utils, preprocessing, torch_utils, module_path, on_cluster, output_dir
-from meta_transformer.meta_model import MetaModel
+from meta_transformer.meta_model import MetaModel, mup_adamw
 import wandb
 import argparse
 from dataclasses import asdict
@@ -158,6 +158,8 @@ if __name__ == "__main__":
     parser.add_argument('--tags', nargs='*', type=str, default=[])
     parser.add_argument('--inputs_dirname', type=str, default=None)
     parser.add_argument('--validate_output', action='store_true', help='Validate depoisoning')
+    parser.add_argument('--in_factor', type=float, default=1.0, help="muP scale factor for input")
+    parser.add_argument('--out_factor', type=float, default=1.0, help="muP scale factor for output")
     args = parser.parse_args()
 
     args.dataset = args.dataset.lower()
@@ -232,6 +234,8 @@ if __name__ == "__main__":
         num_layers=int(args.d_model / 42),
         dropout_rate=args.dropout_rate,
         use_embedding=args.use_embedding,
+        in_factor=args.in_factor,
+        out_factor=args.out_factor,
     )
 
     wandb.init(
@@ -270,11 +274,18 @@ if __name__ == "__main__":
     @optax.inject_hyperparams
     def optimizer(lr: float, 
                   wd: float) -> optax.GradientTransformation:
-        return optax.adamw(lr, 
-                           b1=1-args.adam_b1,
-                           b2=1-args.adam_b2,
-                           eps=args.adam_eps,
-                           weight_decay=wd)
+        return mup_adamw(
+            lr_in=lr,
+            lr_hidden=lr / args.d_model,
+            lr_out=lr / args.d_model,
+            wd_in=wd,
+            wd_hidden=wd,
+            wd_out=wd,
+            b1=1-args.adam_b1,
+            b2=1-args.adam_b2,
+            eps=args.adam_eps,
+        )
+
 
     # simple lr schedule
 #    schedule = optax.warmup_cosine_decay_schedule(
