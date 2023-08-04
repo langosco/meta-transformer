@@ -52,6 +52,7 @@ class MetaModel(nn.Module):
         outputs, activation_stats = transformer(inputs, is_training=is_training)
 
         if self.use_embedding:
+            #outputs = nn.Dense(input_shape, kernel_init=nn.initializers.zeros)(outputs)
             outputs = nn.Dense(input_shape, kernel_init=dense_default_init)(outputs)
         return outputs, activation_stats
 

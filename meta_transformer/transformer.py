@@ -11,15 +11,13 @@ import jax.numpy as jnp
 
 attn_default_init = nn.initializers.variance_scaling(
     scale=2.0 / 24 * 0.4**2, # !?!
-#    scale=0.02,
-    mode="fan_in",  # change?
+    mode="fan_in",
     distribution="truncated_normal",
 )
 
 dense_default_init = nn.initializers.variance_scaling(
-#    scale=0.3**2,  # !?
-    scale=0.09,
-    mode="fan_in",  # change?
+    scale=0.25,
+    mode="fan_in",
     distribution="uniform",
 )
 
