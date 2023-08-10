@@ -8,9 +8,6 @@ from meta_transformer.transformer import Transformer
 from jax.typing import ArrayLike
 
 
-
-
-
 def mup_input_scaling(scale: float = 1.0):
     """Input weights are scaled as O(1). Since the input size is
     constant, we can equivalently use O(1 / fan_in)."""
@@ -74,7 +71,7 @@ class MetaModel(nn.Module):
 
         inputs = inputs + self.param(
             'input/positional_embeddings',
-            mup_input_scaling,
+            mup_input_scaling(),
             (seq_len, self.d_model)
         )
 

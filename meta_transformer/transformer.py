@@ -8,6 +8,8 @@ import flax.linen as nn
 import jax
 import chex
 import jax.numpy as jnp
+from meta_transformer.attention import SelfAttention
+from meta_transformer.utils import get_activation_stats
 
 
 # def width_scaling(width_factor):
@@ -20,13 +22,6 @@ import jax.numpy as jnp
 
 
 # For all weights
-
-
-def get_activation_stats(x):
-    return {
-       # "mean": x.mean(), 
-       # "std": x.std(), 
-        "l1": jnp.abs(x).mean()}
 
 
 class TransformerBlock(nn.Module):
@@ -46,7 +41,7 @@ class TransformerBlock(nn.Module):
     ) -> jax.Array:
         activations = dict()
 
-        self_attention = SelfAttentionDivideByD(
+        self_attention = SelfAttention(
             num_heads=self.num_heads,
             kernel_init=self.weight_init,
             name="self_attention",
@@ -56,8 +51,9 @@ class TransformerBlock(nn.Module):
         activations["residual_pre_attention"] = get_activation_stats(residual)
 
         x = nn.LayerNorm()(x)
-        x = self_attention(x, mask=mask)  # can include mask=mask argument here
+        x, acts = self_attention(x, mask=mask)  # can include mask=mask argument here
         x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=not is_training)
+        activations["attention"] = acts
         activations["attention_out"] = get_activation_stats(x)
         x = x + residual
 
@@ -108,16 +104,3 @@ class Transformer(nn.Module):
             activations[f"layer_{layer}"] = acts
 
         return nn.LayerNorm()(x), activations
-
-
-class SelfAttentionDivideByD(nn.MultiHeadDotProductAttention):
-  """Just like standard self-attention, but divide by d_model instead of 
-  sqrt(d_model). Based on nn.SelfAttention."""
-
-  @nn.compact
-  def __call__(self, inputs_q: Array, mask: Optional[Array] = None, # type: ignore
-               deterministic: Optional[bool] = None):
-    d_query = inputs_q.shape[-1] // self.num_heads
-    inputs_q = inputs_q / jnp.sqrt(d_query)  # divide by sqrt(d_q) twice.
-    return super().__call__(inputs_q, inputs_q, mask,
-                            deterministic=deterministic)

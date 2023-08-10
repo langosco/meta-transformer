@@ -57,7 +57,7 @@ def create_loss_fn(model_forward: callable):
         loss = loss_from_outputs(outputs, data["target"])
         metrics = {f"activation_stats/{k}": v 
                    for k, v in activation_stats.items()}
-        metrics = utils.flatten_dict(metrics)  # max 1 level dict
+        metrics = utils.flatten_dict(metrics, sep=".")  # max 1 level dict
         aux = dict(outputs=outputs, metrics=metrics)
         return loss, aux
     return loss_fn
@@ -462,8 +462,8 @@ if __name__ == "__main__":
                 stop_training = True
                 break
         
-        print("=======================================")
-        print("Completed.")
+    print("=======================================")
+    print("Completed.")
 
 
     # save checkpoint when training is done
