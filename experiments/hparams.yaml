@@ -45,6 +45,8 @@ parameters:
 #        max: 1e-3
     chunk_size:
         value: 1024
+    d_model:
+        value: 1024
     bs:
         value: 64
     use_embedding:
@@ -52,13 +54,17 @@ parameters:
     ndata:
         value: 23_710
     epochs:
-        value: 10
+        value: 15
     max_runtime:  # in minutes
         value: 10
     dataset:
         value: mnist
     log_interval:
         value: 5
+    dropout:
+        value: 0.05
+    dataset:
+        value: mnist
 command:
     - python3
     - depoison.py
