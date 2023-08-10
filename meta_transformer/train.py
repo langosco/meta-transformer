@@ -39,7 +39,6 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
         """Initializes state of the updater."""
         out_rng, subkey = jax.random.split(rng)
         params = self.model.init(subkey, data["input"], is_training=False)
-        params = params.unfreeze()  # necessary to work with optax.MultiTransform
         opt_state = self.opt.init(params)
         return TrainState(
             step=0,
