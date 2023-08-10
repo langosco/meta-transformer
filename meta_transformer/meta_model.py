@@ -47,6 +47,7 @@ class MetaModel(nn.Module):
     in_factor: Optional[float] = 1.0
     out_factor: Optional[float] = 1.0
     init_scale: Optional[float] = 1.0
+    mup_attn_multiplier: Optional[float] = 1.0
 
     @nn.compact
     def __call__(
@@ -84,6 +85,7 @@ class MetaModel(nn.Module):
             dropout_rate=self.dropout_rate,
             widening_factor=self.widening_factor,
             weight_init=mup_hidden_scaling(self.init_scale),
+            mup_attn_multiplier=self.mup_attn_multiplier,
             name="transformer",
         )
 

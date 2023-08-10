@@ -141,6 +141,7 @@ if __name__ == "__main__":
     parser.add_argument('--bs', type=int, help='Batch size', default=64)
     parser.add_argument('--in_factor', type=float, default=1.0, help="muP scale factor for input")
     parser.add_argument('--out_factor', type=float, default=1.0, help="muP scale factor for output")
+    parser.add_argument('--attn_factor', type=float, default=1.0, help="muP scale factor for attention")
 
     parser.add_argument('--chunk_size', type=int, default=1024)
     parser.add_argument('--d_model', type=int, default=1024)
@@ -255,6 +256,7 @@ if __name__ == "__main__":
         in_factor=args.in_factor,
         out_factor=args.out_factor,
         init_scale=args.init_scale,
+        mup_attn_multiplier=args.attn_factor,
     )
 
 

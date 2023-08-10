@@ -42,7 +42,8 @@ def dot_product_attention_weights(query: Array,
                                   dropout_rate: float = 0.,
                                   deterministic: bool = False,
                                   dtype: Optional[Dtype] = None,
-                                  precision: PrecisionLike = None):
+                                  precision: PrecisionLike = None,
+                                  mup_attn_multiplier: float = 1.0):
   """Computes dot-product attention weights given query and key.
   Returns:
     Output of shape `[batch..., num_heads, q_length, kv_length]`.
@@ -74,8 +75,10 @@ def dot_product_attention_weights(query: Array,
     big_neg = jnp.finfo(dtype).min
     attn_weights = jnp.where(mask, attn_weights, big_neg)
 
-  # normalize the attention weights
+  attn_weights = attn_weights * mup_attn_multiplier
   activations['logits'] = get_activation_stats(attn_weights)
+  
+  # normalize the attention weights
   attn_weights = jax.nn.softmax(attn_weights).astype(dtype)
 
   # apply attention dropout
@@ -104,7 +107,8 @@ def dot_product_attention(query: Array,
                           dropout_rate: float = 0.,
                           deterministic: bool = False,
                           dtype: Optional[Dtype] = None,
-                          precision: PrecisionLike = None):
+                          precision: PrecisionLike = None,
+                          mup_attn_multiplier: float = 1.0):
   """Computes dot-product attention given query, key, and value.
   Returns:
     Output of shape `[batch..., q_length, num_heads, v_depth_per_head]`.
@@ -128,7 +132,7 @@ def dot_product_attention(query: Array,
   # compute attention weights
   attn_weights, acts = dot_product_attention_weights(
       query, key, bias, mask, broadcast_dropout, dropout_rng, dropout_rate,
-      deterministic, dtype, precision)
+      deterministic, dtype, precision, mup_attn_multiplier)
   activations.update(acts)
 
   # return weighted sum over values for each query position
@@ -156,6 +160,7 @@ class MultiHeadDotProductAttention(Module):
   decode: bool = False
   qkv_dot_general: DotGeneralT = lax.dot_general
   out_dot_general: DotGeneralT = lax.dot_general
+  mup_attn_multiplier: float = 1.0
 
   @compact
   def __call__(self,
@@ -252,7 +257,8 @@ class MultiHeadDotProductAttention(Module):
         broadcast_dropout=self.broadcast_dropout,
         deterministic=m_deterministic,
         dtype=self.dtype,
-        precision=self.precision)  # pytype: disable=wrong-keyword-args
+        precision=self.precision,
+        mup_attn_multiplier=self.mup_attn_multiplier)  # pytype: disable=wrong-keyword-args
     # back to the original inputs dimensions
 
     out = DenseGeneral(
@@ -274,11 +280,12 @@ class SelfAttention(MultiHeadDotProductAttention):
   """Self-attention special case of multi-head dot-product attention."""
 
   @compact
-  def __call__(self, inputs_q: Array, mask: Optional[Array] = None, # type: ignore
+  def __call__(self, inputs_q: Array, 
+               mask: Optional[Array] = None, # type: ignore
                deterministic: Optional[bool] = None):
     """Applies multi-head dot product self-attention on the input data.
     Returns:
       output of shape `[batch_sizes..., length, features]`.
     """
-    return super().__call__(inputs_q, inputs_q, mask,
+    return super().__call__(inputs_q, inputs_q, mask, 
                             deterministic=deterministic)

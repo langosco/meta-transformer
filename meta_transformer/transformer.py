@@ -31,6 +31,7 @@ class TransformerBlock(nn.Module):
     widening_factor: int = 4
     name: Optional[str] = None
     weight_init: Optional[callable] = None
+    mup_attn_multiplier: float = 1.0
 
     @nn.compact
     def __call__(
@@ -45,6 +46,7 @@ class TransformerBlock(nn.Module):
             num_heads=self.num_heads,
             kernel_init=self.weight_init,
             name="self_attention",
+            mup_attn_multiplier=self.mup_attn_multiplier,
         )
 
         residual = x
@@ -80,6 +82,7 @@ class Transformer(nn.Module):
     widening_factor: int = 4
     name: Optional[str] = None
     weight_init: Optional[callable] = None
+    mup_attn_multiplier: float = 1.0
 
     @nn.compact
     def __call__(
@@ -100,6 +103,7 @@ class Transformer(nn.Module):
                 dropout_rate=self.dropout_rate,
                 widening_factor=self.widening_factor,
                 weight_init=self.weight_init,
+                mup_attn_multiplier=self.mup_attn_multiplier,
             )(x, is_training=is_training)
             activations[f"layer_{layer}"] = acts
 

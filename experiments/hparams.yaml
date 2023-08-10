@@ -1,7 +1,8 @@
-name: depoisoning_sweep_test_mup
+name: depoisoning_sweep_for_mup
 project: depoison-sweeps
 program: ./depoison.py
 method: random
+description: "Find good hparams for mup"
 metric:
     name: val/loss
     goal: minimize
@@ -19,6 +20,10 @@ parameters:
         min: 1e-5
         max: 1e5
     out_factor:
+        distribution: log_uniform_values
+        min: 1e-5
+        max: 1e5
+    attn_factor:
         distribution: log_uniform_values
         min: 1e-5
         max: 1e5
