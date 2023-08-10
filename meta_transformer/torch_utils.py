@@ -183,43 +183,17 @@ import datasets
 from torch.utils.data import TensorDataset
 
 
-def get_accuracy(model: nn.Module, inputs: torch.Tensor, targets: torch.Tensor) -> float:
-    """Compute accuracy of model on inputs and targets."""
+def get_accuracy(outputs: torch.Tensor, targets: torch.Tensor) -> float:
     with torch.no_grad():
-        outputs = model(inputs.float())
         _, predicted = torch.max(outputs.data, 1)
         correct = (predicted == targets).sum().item()
         return correct / len(targets)
     
 
-def get_loss(model: nn.Module, inputs: torch.Tensor, targets: torch.Tensor) -> float:
-    """Compute loss of model on inputs and targets."""
+def get_loss(outputs: torch.Tensor, targets: torch.Tensor) -> float:
     with torch.no_grad():
-        outputs = model(inputs.float())
         loss = nn.CrossEntropyLoss()(outputs, targets)
         return loss.item()
-
-
-#def load_mnist_test_data():
-#    dataset = datasets.load_dataset('mnist')
-#    dataset = dataset.with_format("torch")
-#
-#    test_data, test_labels = dataset['test']["image"], dataset['test']["label"]
-#    test_data = einops.rearrange(test_data, 'b h w -> b 1 h w') / 255.
-#    test_data, test_labels = test_data.to('cuda'), test_labels.to('cuda')
-#    test_data, test_labels = test_data.contiguous(), test_labels.contiguous()
-#    return TensorDataset(test_data, test_labels)
-#
-#
-#def load_cifar10_test_data():
-#    dataset = datasets.load_dataset('cifar10')
-#    dataset = dataset.with_format("torch")
-#
-#    test_data, test_labels = dataset['test']["img"], dataset['test']["label"]
-#    test_data = einops.rearrange(test_data, 'b h w c -> b c h w') / 255.
-#    test_data, test_labels = test_data.to('cuda'), test_labels.to('cuda')
-#    test_data, test_labels = test_data.contiguous(), test_labels.contiguous()
-#    return TensorDataset(test_data, test_labels)
 
 
 if on_cluster:
@@ -231,3 +205,10 @@ def load_test_data(dataset="MNIST"):
     cfg = gen_models.config.Config(dataset=dataset, datadir=DATA_DIR)
     _, test = gen_models.utils.init_datasets(cfg)
     return TensorDataset(*[t.to('cuda') for t in test.tensors])
+
+
+def filter_data(data: TensorDataset, label: int) -> TensorDataset:
+    """Remove all dataponints with a given label."""
+    data, labels = data.tensors
+    mask = labels != label
+    return TensorDataset(data[mask], labels[mask])

@@ -1,0 +1,44 @@
+project: mup_test
+name: divide_by_d
+program: ./depoison.py
+method: grid
+description: "Test muP (after fixing divide-by-dmodel bug.)"
+metric:
+    name: val/loss
+    goal: minimize
+parameters:
+    seed:
+        values: [0, 1, 2, 3, 4, 5]
+    d_model:
+        values: [32, 64, 128, 256, 512, 1024, 2048, 4096]
+    log_interval:
+        value: 1
+    n_steps:
+        value: 3
+    lr:
+        value: 1e-2
+    wd:
+        value: 1e-6
+    in_factor:
+        value: 1.
+    out_factor:
+        value: 1e-2
+    chunk_size:
+        value: 1024
+    bs:
+        value: 128
+    use_embedding:
+        value: True
+    ndata:
+        value: 4000
+    epochs:
+        value: 1
+    dataset:
+        value: mnist
+    dropout:
+        value: 0.
+command:
+    - python3
+    - depoison.py
+    - --use_wandb
+    - ${args}

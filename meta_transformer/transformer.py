@@ -10,24 +10,23 @@ import chex
 import jax.numpy as jnp
 
 
-def width_scaling(d_model):
-    """Initialize weights with stddev 1 / sqrt(d_model)."""
-    def init(key, named_shape, dtype):
-        stddev = 1.0 / jnp.sqrt(d_model)
-        stddev = stddev / jnp.array(.87962566103423978, dtype)
-        return jax.random.truncated_normal(key, -2, 2, named_shape, dtype) * stddev
-    return init
+# def width_scaling(width_factor):
+#     """Initialize weights with stddev 1 / sqrt(d_model)."""
+#     def init(key, named_shape, dtype):
+#         stddev = 0.02 / jnp.sqrt(width_factor)
+#         stddev = stddev / jnp.array(.87962566103423978, dtype)
+#         return jax.random.truncated_normal(key, -2, 2, named_shape, dtype) * stddev
+#     return init
 
 
-fan_in_scaling = nn.initializers.variance_scaling(
-    scale=1.0,
-    mode="fan_in",
-    distribution="truncated_normal",
-)
+# For all weights
 
 
 def get_activation_stats(x):
-    return {"mean": x.mean(), "std": x.std(), "l1": jnp.abs(x).mean()}
+    return {
+       # "mean": x.mean(), 
+       # "std": x.std(), 
+        "l1": jnp.abs(x).mean()}
 
 
 class TransformerBlock(nn.Module):
@@ -46,32 +45,32 @@ class TransformerBlock(nn.Module):
         is_training: bool = True,
     ) -> jax.Array:
         activations = dict()
-        if self.weight_init is None:
-            #weight_init = width_scaling(self.d_model)
-            weight_init = fan_in_scaling
-        else:
-            weight_init = self.weight_init
 
         self_attention = SelfAttentionDivideByD(
             num_heads=self.num_heads,
-            kernel_init=weight_init,
+            kernel_init=self.weight_init,
             name="self_attention",
         )
 
-        activations["pre_attention"] = get_activation_stats(x)
         residual = x
+        activations["residual_pre_attention"] = get_activation_stats(residual)
+
         x = nn.LayerNorm()(x)
         x = self_attention(x, mask=mask)  # can include mask=mask argument here
         x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=not is_training)
+        activations["attention_out"] = get_activation_stats(x)
         x = x + residual
 
-        activations["pre_mlp"] = get_activation_stats(x)
         residual = x
+        activations["residual_pre_mlp"] = get_activation_stats(residual)
+
         x = nn.LayerNorm()(x)
-        x = nn.Dense(self.widening_factor * self.d_model, kernel_init=fan_in_scaling)(x)
+        x = nn.Dense(self.widening_factor * self.d_model, kernel_init=self.weight_init)(x)
+        activations["mlp_mid"] = get_activation_stats(x)
         x = nn.gelu(x)
-        x = nn.Dense(self.d_model, kernel_init=fan_in_scaling)(x)
+        x = nn.Dense(self.d_model, kernel_init=self.weight_init)(x)
         x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=not is_training)
+        activations["mlp_out"] = get_activation_stats(x)
         x = x + residual
 
         return x, activations
@@ -84,6 +83,7 @@ class Transformer(nn.Module):
     dropout_rate: float
     widening_factor: int = 4
     name: Optional[str] = None
+    weight_init: Optional[callable] = None
 
     @nn.compact
     def __call__(
@@ -103,6 +103,7 @@ class Transformer(nn.Module):
                 d_model=self.d_model,
                 dropout_rate=self.dropout_rate,
                 widening_factor=self.widening_factor,
+                weight_init=self.weight_init,
             )(x, is_training=is_training)
             activations[f"layer_{layer}"] = acts
 
@@ -116,7 +117,7 @@ class SelfAttentionDivideByD(nn.MultiHeadDotProductAttention):
   @nn.compact
   def __call__(self, inputs_q: Array, mask: Optional[Array] = None, # type: ignore
                deterministic: Optional[bool] = None):
-    d_model = inputs_q.shape[-1]
-    inputs_q = inputs_q / jnp.sqrt(d_model)  # divide by sqrt(d_model) twice.
+    d_query = inputs_q.shape[-1] // self.num_heads
+    inputs_q = inputs_q / jnp.sqrt(d_query)  # divide by sqrt(d_q) twice.
     return super().__call__(inputs_q, inputs_q, mask,
                             deterministic=deterministic)

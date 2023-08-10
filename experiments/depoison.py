@@ -16,6 +16,8 @@ from dataclasses import asdict
 from meta_transformer.train import Updater, Logger
 from meta_transformer.data import data_iterator, split_data
 from etils import epath
+import torch
+from torch.utils.data import TensorDataset
 #from augmentations import permute_checkpoint
 permute_checkpoint = lambda *args, **kwargs: [None]
 
@@ -67,11 +69,11 @@ LAYERS_TO_PERMUTE = ['Conv2d_0', 'Conv2d_1', 'Conv2d_2', 'Conv2d_3',
 
 def augment_list_of_nets(nets: List[dict], seed):
     """Augment a list of nets with random augmentations"""
-    rng = np.random.default_rng(seed)
+    np_rng = np.random.default_rng(seed)
     augmented_nets = []
     for net in nets:
         augmented = permute_checkpoint(
-            rng,
+            np_rng,
             net,
             permute_layers=LAYERS_TO_PERMUTE,
             num_permutations=2,  # 2x batch size
@@ -90,6 +92,7 @@ def process_nets(nets: List[dict],
     nets = augment_list_of_nets(nets, seed) if augment else nets
     nets = np.stack([preprocessing.preprocess(net, args.chunk_size)[0]
                         for net in nets])
+    nets = nets[:, :10, :]
     return nets / data_std  # TODO this is dependent on dataset!!
 
 
@@ -135,13 +138,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Training run')
     parser.add_argument('--lr', type=float, help='Learning rate', default=2e-5)
     parser.add_argument('--wd', type=float, help='Weight decay', default=5e-4)
-    parser.add_argument('--bs', type=int, help='Batch size', default=32)
+    parser.add_argument('--bs', type=int, help='Batch size', default=64)
     parser.add_argument('--in_factor', type=float, default=1.0, help="muP scale factor for input")
     parser.add_argument('--out_factor', type=float, default=1.0, help="muP scale factor for output")
 
     parser.add_argument('--chunk_size', type=int, default=1024)
     parser.add_argument('--d_model', type=int, default=1024)
-    parser.add_argument('--use_embedding', type=bool, default=False)
+    parser.add_argument('--use_embedding', type=bool, default=True)
     parser.add_argument('--adam_b1', type=float, default=0.1)
     parser.add_argument('--adam_b2', type=float, default=0.001)
     parser.add_argument('--adam_eps', type=float, default=1e-8)
@@ -162,15 +165,23 @@ if __name__ == "__main__":
 #    parser.add_argument('--num_heads', type=int, help='Number of heads', default=16)
 #    parser.add_argument('--num_layers', type=int, help='Number of layers', default=24)
     parser.add_argument('--inputs_dirname', type=str, default=None)
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--log_interval', type=int, default=5)
+    parser.add_argument('--n_steps', type=int, default=np.inf)
+    parser.add_argument('--init_scale', type=float, default=1.0)
     args = parser.parse_args()
 
     args.dataset = args.dataset.lower()
     args.tags.append("HPC" if on_cluster else "local")
 
-    rng = random.PRNGKey(42)
+    rng = random.PRNGKey(args.seed)
+    np_rng = np.random.default_rng()
 
-    FILTER = False
-    LOG_INTERVAL = 5
+
+    FILTER = False  # filter out high std weights
+    NOTES = ""  # for wandb
+    TAGS = [args.dataset]  # for wandb
+    TARGETS_DIRNAME = "clean"  # name of directory with target weights
 
 
     if not on_cluster:
@@ -198,8 +209,6 @@ if __name__ == "__main__":
         "svhn": "poison_noL1",
     }
 
-    TARGETS_DIRNAME = "clean"
-    INPUTS_DIRNAME = args.inputs_dirname if args.inputs_dirname is not None else inputs_dirnames[args.dataset]
 
     if args.dataset == "mnist":
         architecture = torch_utils.CNNSmall()  # for MNIST
@@ -208,22 +217,29 @@ if __name__ == "__main__":
     else:
         raise ValueError("Unknown dataset.")
 
-    NOTES = ""
-    TAGS = [args.dataset]
 
     # Load model checkpoints
     print("Loading data...")
+    inputs_dirname = args.inputs_dirname if args.inputs_dirname is not None else inputs_dirnames[args.dataset]
     inputs, targets, get_pytorch_model = torch_utils.load_input_and_target_weights(
         model=architecture,
         num_models=args.ndata, 
         data_dir=model_dataset_paths[args.dataset],
-        inputs_dirname=inputs_dirnames[args.dataset],
+        inputs_dirname=inputs_dirname,
+        targets_dirname=TARGETS_DIRNAME,
     )
     weights_std = jax.flatten_util.ravel_pytree(inputs.tolist())[0].std()
 
     if FILTER:
         inputs, targets = preprocessing.filter_data(inputs, targets)
 
+    # shuffle
+    idx = np.arange(len(inputs))
+    np_rng.shuffle(idx)
+    inputs = inputs[idx]
+    targets = targets[idx]
+
+    # split into train and val
     (train_inputs, train_targets, 
         val_inputs, val_targets) = split_data(inputs, targets, VAL_DATA_RATIO)
     print("Done.")
@@ -232,54 +248,27 @@ if __name__ == "__main__":
     # Meta-Model Initialization
     model = MetaModel(
         d_model=args.d_model,
-        num_heads=int(args.d_model / 64),
-        num_layers=int(args.d_model / 42),
+#        num_heads=int(args.d_model / 64),
+        num_heads=16,
+#        num_layers=int(args.d_model / 42),
+        num_layers=2, # for mup test
         dropout_rate=args.dropout_rate,
         use_embedding=args.use_embedding,
         in_factor=args.in_factor,
         out_factor=args.out_factor,
+        init_scale=args.init_scale,
     )
 
-    wandb.init(
-        mode="online" if args.use_wandb else "disabled",
-        project="meta-models-depoison",
-        tags=args.tags,
-        config={
-            "dataset": "MNIST-meta",
-            "lr": args.lr,
-            "weight_decay": args.wd,
-            "batchsize": args.bs,
-            "num_epochs": args.epochs,
-            "dataset": args.dataset,
-            "inputs_dirname": INPUTS_DIRNAME,
-            "model_config": asdict(model),
-            "num_datapoints": args.ndata,
-            "adam/b1": args.adam_b1,
-            "adam/b2": args.adam_b2,
-            "adam/eps": args.adam_eps,
-        },
-        notes=NOTES,
-        )  
-
-    steps_per_epoch = len(train_inputs) // args.bs
-
-    print()
-    print(f"Number of training examples: {len(train_inputs)}.")
-    print(f"Number of validation examples: {len(val_inputs)}.")
-    print(f"Std of training data: {weights_std}. (Should be around {DATA_STD}).")
-    print("Steps per epoch:", steps_per_epoch)
-    print("Total number of steps:", steps_per_epoch * args.epochs)
-    print()
 
 
     # Initialization
+    model_scale = args.d_model / 1024
     @optax.inject_hyperparams
-    def optimizer(lr: float, 
-                  wd: float) -> optax.GradientTransformation:
+    def optimizer(lr: float, wd: float) -> optax.GradientTransformation:
         return mup_adamw(
             lr_in=lr,
-            lr_hidden=lr / args.d_model,
-            lr_out=lr / args.d_model,
+            lr_hidden=lr / model_scale,
+            lr_out=lr / model_scale,
             wd_in=wd,
             wd_hidden=wd,
             wd_out=wd,
@@ -313,7 +302,7 @@ if __name__ == "__main__":
     opt = optimizer(lr=schedule, wd=args.wd)
     loss_fn = create_loss_fn(model.apply)
     updater = Updater(opt=opt, model=model, loss_fn=loss_fn)
-    logger = Logger(log_interval=LOG_INTERVAL)
+    logger = Logger(log_interval=args.log_interval)
     rng, subkey = random.split(rng)
     init_batch = {
         "input": train_inputs[:2],
@@ -322,47 +311,43 @@ if __name__ == "__main__":
     init_batch = process_batch(init_batch, 0, augment=False, data_std=weights_std)
     state = updater.init_params(subkey, init_batch)
 
-    print("Number of parameters:",
-           utils.count_params(state.params) / 1e6, "Million")
-
 
     np_rng = np.random.default_rng()
 
 
-    # Helper fns to validate reconstructed base model
-    # TODO only MNIST for now! Should do this for CIFAR-10 too
-    from gen_models import poison, config
-    cfg = config.Config()  # default works for both MNIST and CIFAR-10
-    unpreprocess = preprocessing.get_unpreprocess_fn(
-        val_inputs[0],
-        chunk_size=args.chunk_size,
-    )
-
-
     if args.validate_output:
+        # Helper fns to validate reconstructed base model
+        # TODO kinda clunky atm
+        from gen_models import poison, config
+        cfg = config.Config()  # default works for both MNIST and CIFAR-10
+        unpreprocess = preprocessing.get_unpreprocess_fn(
+            val_inputs[0],
+            chunk_size=args.chunk_size,
+        )
+
+        # clean
         base_test_td = torch_utils.load_test_data(dataset=args.dataset.upper())
-        base_poisoned_td = poison.poison_set(base_test_td, train=False, cfg=cfg)
-        base_data_poisoned, base_labels_poisoned = base_poisoned_td.tensors
         base_data_clean, base_labels_clean = base_test_td.tensors
 
+        # poisoned
+        base_test_filtered_td = torch_utils.filter_data(base_test_td, label=8)
+        base_poisoned_td = poison.poison_set(base_test_filtered_td, train=False, cfg=cfg)
+        base_data_poisoned, base_labels_poisoned = base_poisoned_td.tensors
 
-    def validate_base(model):  # TODO: reduntant forward passes
+
+    def validate_base(model):
         """Validate reconstructed base model."""
+        with torch.no_grad():
+            model.eval()
+            outputs_on_clean = model(base_data_clean.float())
+            outputs_on_poisoned = model(base_data_poisoned.float())
+
         metrics = dict(
             accuracy=torch_utils.get_accuracy(
-                model, base_data_clean, base_labels_clean
+                outputs_on_clean, base_labels_clean
             ),
-            degree_poisoned=torch_utils.get_accuracy(
-                model, base_data_poisoned, base_labels_poisoned
-            ),
-            degree_rehabilitated=torch_utils.get_accuracy(
-                model, base_data_poisoned, base_labels_clean
-            ),
-            loss=torch_utils.get_loss(
-                model, base_data_clean, base_labels_clean,
-            ),
-            degree_poisoned_loss=torch_utils.get_loss(
-                model, base_data_poisoned, base_labels_poisoned
+            attack_success_rate=torch_utils.get_accuracy(
+                outputs_on_poisoned, base_labels_poisoned
             ),
         )
         return {"out/" + k: v for k, v in metrics.items()}
@@ -382,11 +367,46 @@ if __name__ == "__main__":
             out.append(validate_base(base_model))
             del base_model
         return jax.tree_map(lambda *x: np.mean(x), *out)
+
+
+    wandb.init(
+        mode="online" if args.use_wandb else "disabled",
+        project="meta-models-depoison",
+        tags=args.tags,
+        config={
+            "dataset": "MNIST-meta",
+            "lr": args.lr,
+            "weight_decay": args.wd,
+            "batchsize": args.bs,
+            "num_epochs": args.epochs,
+            "dataset": args.dataset,
+            "inputs_dirname": inputs_dirname,
+            "model_config": asdict(model),
+            "num_datapoints": args.ndata,
+            "adam/b1": args.adam_b1,
+            "adam/b2": args.adam_b2,
+            "adam/eps": args.adam_eps,
+        },
+        notes=NOTES,
+        )  
+
+    steps_per_epoch = len(train_inputs) // args.bs
+
+    print()
+    print(f"Number of training examples: {len(train_inputs)}.")
+    print(f"Number of validation examples: {len(val_inputs)}.")
+    print(f"Std of training data: {weights_std}. (Should be around {DATA_STD}).")
+    print("Steps per epoch:", steps_per_epoch)
+    print("Total number of steps:", steps_per_epoch * args.epochs)
+    print("Number of parameters:",
+           utils.count_params(state.params) / 1e6, "Million")
+    print()
+
         
 
     # Training loop
     start = time()
-    max_runtime_reached = False
+    stop_training = False
     for epoch in range(args.epochs):
         rng, subkey = random.split(rng)
 
@@ -418,7 +438,7 @@ if __name__ == "__main__":
         val_metrics_means = jax.tree_map(lambda *x: np.mean(x), *valdata)
         val_metrics_means.update({"epoch": epoch, "step": state.step})
         logger.log(state, val_metrics_means, force_log=True)
-        if max_runtime_reached:
+        if stop_training:
             break
 
 
@@ -429,14 +449,25 @@ if __name__ == "__main__":
             train_metrics.update({"epoch": epoch})
             logger.log(state, train_metrics)
             if time() - start > args.max_runtime * 60:
-                print("=======================================")
-                print("Max runtime reached. Stopping training.")
-                print("Computing final validation metrics:")
-                max_runtime_reached = True
+                print()
+                print("Maximum runtime reached. Stopping training.")
+                print()
+                stop_training = True
+                break
+
+            if state.step > args.n_steps:
+                print()
+                print("Maximum number of steps reached. Stopping training.")
+                print()
+                stop_training = True
+                break
+        
+        print("=======================================")
+        print("Completed.")
 
 
-# save checkpoint when training is done
-if args.save_checkpoint:
-    print("Saving checkpoint...")
-    checkpoints_dir = epath.Path(output_dir) / "mm-checkpoints" / "depoison" / args.dataset
-    utils.save_checkpoint(state.params, name=f"run_{int(time())}", path=checkpoints_dir)
+    # save checkpoint when training is done
+    if args.save_checkpoint:
+        print("Saving checkpoint...")
+        checkpoints_dir = epath.Path(output_dir) / "mm-checkpoints" / "depoison" / args.dataset
+        utils.save_checkpoint(state.params, name=f"run_{int(time())}", path=checkpoints_dir)

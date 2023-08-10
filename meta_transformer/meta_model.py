@@ -4,16 +4,36 @@ import jax
 import flax.linen as nn
 import optax
 
-from meta_transformer.transformer import Transformer#, dense_default_init
+from meta_transformer.transformer import Transformer
 from jax.typing import ArrayLike
 
 
-# for the input embedding:
-fan_in_scaling = nn.initializers.variance_scaling(
-    scale=1.0,
-    mode="fan_in",
-    distribution="truncated_normal",
-)
+
+
+
+def mup_input_scaling(scale: float = 1.0):
+    """Input weights are scaled as O(1). Since the input size is
+    constant, we can equivalently use O(1 / fan_in)."""
+    return nn.initializers.variance_scaling(
+        scale=0.02*scale,
+        mode="fan_in",
+        distribution="truncated_normal",
+    )
+
+
+def mup_hidden_scaling(scale: float = 1.0):
+    """Scale hidden weights with variance proportional to 1 / d."""
+    return nn.initializers.variance_scaling(
+        scale=0.02*scale,
+        mode="fan_in",
+        distribution="truncated_normal",
+    )
+
+
+
+# output is initialized as 1 / d**2, but we can equivalently set
+# init to 0.
+mup_output_scaling = nn.initializers.zeros
 
 
 @dataclasses.dataclass
@@ -29,6 +49,7 @@ class MetaModel(nn.Module):
     use_embedding: Optional[bool] = True
     in_factor: Optional[float] = 1.0
     out_factor: Optional[float] = 1.0
+    init_scale: Optional[float] = 1.0
 
     @nn.compact
     def __call__(
@@ -42,7 +63,7 @@ class MetaModel(nn.Module):
 
         embedding = nn.Dense(
             self.d_model, 
-            kernel_init=fan_in_scaling,
+            kernel_init=mup_input_scaling(self.init_scale),
             name="input/embedding"
         )
 
@@ -53,7 +74,7 @@ class MetaModel(nn.Module):
 
         inputs = inputs + self.param(
             'input/positional_embeddings',
-            nn.initializers.zeros,
+            mup_input_scaling,
             (seq_len, self.d_model)
         )
 
@@ -65,6 +86,7 @@ class MetaModel(nn.Module):
             num_layers=self.num_layers,
             dropout_rate=self.dropout_rate,
             widening_factor=self.widening_factor,
+            weight_init=mup_hidden_scaling(self.init_scale),
             name="transformer",
         )
 
@@ -78,7 +100,9 @@ class MetaModel(nn.Module):
 
         if self.use_embedding:
             outputs = unembedding(outputs)
-        return outputs * self.out_factor, activation_stats
+        outputs = outputs * self.out_factor
+        activation_stats["output"] = jax.numpy.abs(outputs).mean()
+        return outputs, activation_stats
 
 
 param_labels = {
@@ -140,7 +164,8 @@ class MetaModelClassifier(nn.Module):
         #net_embed = NetEmbedding(embed_dim=self.d_model)
         #inputs = vmap(net_embed)(inputs)
         if self.use_embedding:
-            inputs = nn.Dense(self.transformer.d_model, kernel_init=fan_in_scaling)(inputs)
+            inputs = nn.Dense(self.transformer.d_model, 
+                              kernel_init=mup_hidden_scaling())(inputs)
         _, seq_len, _ = inputs.shape
 
         positional_embeddings = self.param(
@@ -164,4 +189,4 @@ class MetaModelClassifier(nn.Module):
 
         first_out = outputs[:, 0, :]  # [B, D]
         # TODO: this is not the muP way
-        return nn.Dense(self.num_classes, kernel_init=fan_in_scaling, name="linear_output")(first_out)  # [B, V]
+        return nn.Dense(self.num_classes, kernel_init=mup_output_scaling, name="linear_output")(first_out)  # [B, V]

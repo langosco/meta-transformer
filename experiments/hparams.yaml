@@ -1,23 +1,28 @@
-name: depoisoning_sweep
+name: depoisoning_sweep_test_mup
+project: depoison-sweeps
 program: ./depoison.py
-method: bayes
+method: random
 metric:
     name: val/loss
     goal: minimize
 parameters:
     lr:
         distribution: log_uniform_values
-        min: 1e-5
-        max: 1e-3
+        min: 1e-6
+        max: 1e0
     wd:
         distribution: log_uniform_values
-        min: 1e-6
+        min: 1e-7
         max: 1e-3
     in_factor:
         distribution: log_uniform_values
-        min: 1e-2
-        max: 1e2
+        min: 1e-5
+        max: 1e5
     out_factor:
+        distribution: log_uniform_values
+        min: 1e-5
+        max: 1e5
+    init_scale:
         distribution: log_uniform_values
         min: 1e-2
         max: 1e2
@@ -36,15 +41,15 @@ parameters:
     chunk_size:
         value: 1024
     bs:
-        values: [16, 32, 64]
+        value: 64
     use_embedding:
         value: True
     ndata:
         value: 23_710
     epochs:
-        value: 30
+        value: 10
     max_runtime:  # in minutes
-        value: 120
+        value: 10
     dataset:
         value: mnist
 command:
