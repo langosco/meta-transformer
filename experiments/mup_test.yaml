@@ -2,7 +2,7 @@ project: mup_test
 name: divide_by_d
 program: ./depoison.py
 method: grid
-description: "Test muP (after fixing divide-by-dmodel bug.)"
+description: "Test muP."
 metric:
     name: val/loss
     goal: minimize
@@ -16,7 +16,7 @@ parameters:
     n_steps:
         value: 3
     lr:
-        value: 1e-2
+        value: 1e-4
     wd:
         value: 1e-6
     in_factor:
