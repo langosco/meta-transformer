@@ -83,17 +83,17 @@ def augment_list_of_nets(nets: List[dict], seed):
     return augmented_nets
 
 
-def process_nets(nets: List[dict], 
-                seed: int,
-                augment: bool = True,
-                data_std: float = DATA_STD,
-                ) -> ArrayLike:
+def process_nets(
+        nets: List[dict], 
+        seed: int,
+        augment: bool = True,
+        data_std: float = DATA_STD,
+    ) -> ArrayLike:
     """Permutation augment, then flatten to arrays."""
     nets = augment_list_of_nets(nets, seed) if augment else nets
     nets = np.stack([preprocessing.preprocess(net, args.chunk_size)[0]
                         for net in nets])
-    nets = nets[:, :10, :]
-    return nets / data_std  # TODO this is dependent on dataset!!
+    return nets / data_std
 
 
 def process_batch(
@@ -248,10 +248,8 @@ if __name__ == "__main__":
     # Meta-Model Initialization
     model = MetaModel(
         d_model=args.d_model,
-#        num_heads=int(args.d_model / 64),
-        num_heads=16,
-#        num_layers=int(args.d_model / 42),
-        num_layers=2, # for mup test
+        num_heads=int(args.d_model / 64),
+        num_layers=int(args.d_model / 42),
         dropout_rate=args.dropout_rate,
         use_embedding=args.use_embedding,
         in_factor=args.in_factor,
