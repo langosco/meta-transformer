@@ -256,7 +256,7 @@ if __name__ == "__main__":
         in_factor=args.in_factor,
         out_factor=args.out_factor,
         init_scale=args.init_scale,
-        mup_attn_multiplier=args.attn_factor,
+        attn_factor=args.attn_factor,
     )
 
 
