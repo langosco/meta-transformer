@@ -37,7 +37,7 @@ class TransformerBlock(nn.Module):
     d_model: int  # d_model = num_heads * key_size
     dropout_rate: float
     widening_factor: Optional[int] = 4
-    attn_scale: Optional[float] = 1.0
+    attn_factor: Optional[float] = 1.0
     init_scale: Optional[float] = 1.0
     name: Optional[str] = None
 
@@ -59,7 +59,7 @@ class TransformerBlock(nn.Module):
             num_heads=self.num_heads,
             kernel_init=mup_attn_scaling(self.init_scale),
             name="self_attention",
-            attn_scale=self.attn_scale,
+            attn_factor=self.attn_factor,
         )
 
         residual = x
@@ -93,7 +93,7 @@ class Transformer(nn.Module):
     d_model: int  # can be inferred from x.shape[-1]
     dropout_rate: float
     widening_factor: int = 4
-    attn_scale: float = 1.0
+    attn_factor: float = 1.0
     init_scale: Optional[float] = 1.0
     name: Optional[str] = None
 
@@ -115,7 +115,7 @@ class Transformer(nn.Module):
                 d_model=self.d_model,
                 dropout_rate=self.dropout_rate,
                 widening_factor=self.widening_factor,
-                attn_scale=self.attn_scale,
+                attn_factor=self.attn_factor,
                 init_scale=self.init_scale,
             )(x, is_training=is_training)
             activations[f"layer_{layer}"] = acts

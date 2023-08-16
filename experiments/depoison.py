@@ -162,6 +162,7 @@ if __name__ == "__main__":
 
     parser.add_argument('--use_wandb', action='store_true')
     parser.add_argument('--tags', nargs='*', type=str, default=[])
+    parser.add_argument('--notes', type=str, default=None, help="wandb notes")
 
 #    parser.add_argument('--num_heads', type=int, help='Number of heads', default=16)
 #    parser.add_argument('--num_layers', type=int, help='Number of layers', default=24)
@@ -174,14 +175,13 @@ if __name__ == "__main__":
 
     args.dataset = args.dataset.lower()
     args.tags.append("HPC" if on_cluster else "local")
+    args.tags.append(args.dataset)
 
     rng = random.PRNGKey(args.seed)
     np_rng = np.random.default_rng()
 
 
     FILTER = False  # filter out high std weights
-    NOTES = ""  # for wandb
-    TAGS = [args.dataset]  # for wandb
     TARGETS_DIRNAME = "clean"  # name of directory with target weights
 
 
@@ -373,6 +373,7 @@ if __name__ == "__main__":
         mode="online" if args.use_wandb else "disabled",
         project="meta-models-depoison",
         tags=args.tags,
+        notes=args.notes,
         config={
             "dataset": "MNIST-meta",
             "lr": args.lr,
@@ -387,7 +388,6 @@ if __name__ == "__main__":
             "adam/b2": args.adam_b2,
             "adam/eps": args.adam_eps,
         },
-        notes=NOTES,
         )  
 
     steps_per_epoch = len(train_inputs) // args.bs

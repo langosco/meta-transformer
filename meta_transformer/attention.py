@@ -43,7 +43,7 @@ def dot_product_attention_weights(query: Array,
                                   deterministic: bool = False,
                                   dtype: Optional[Dtype] = None,
                                   precision: PrecisionLike = None,
-                                  attn_scale: float = 1.0, # Lauro: scale attention logits by this factor
+                                  attn_factor: float = 1.0, # Lauro: scale attention logits by this factor
                                   ):
   """Computes dot-product attention weights given query and key.
   Returns:
@@ -76,7 +76,7 @@ def dot_product_attention_weights(query: Array,
     big_neg = jnp.finfo(dtype).min
     attn_weights = jnp.where(mask, attn_weights, big_neg)
 
-  attn_weights = attn_weights * attn_scale
+  attn_weights = attn_weights * attn_factor
   activations['logits'] = get_activation_stats(attn_weights)
   
   # normalize the attention weights
@@ -109,7 +109,7 @@ def dot_product_attention(query: Array,
                           deterministic: bool = False,
                           dtype: Optional[Dtype] = None,
                           precision: PrecisionLike = None,
-                          attn_scale: float = 1.0):
+                          attn_factor: float = 1.0):
   """Computes dot-product attention given query, key, and value.
   Returns:
     Output of shape `[batch..., q_length, num_heads, v_depth_per_head]`.
@@ -133,7 +133,7 @@ def dot_product_attention(query: Array,
   # compute attention weights
   attn_weights, acts = dot_product_attention_weights(
       query, key, bias, mask, broadcast_dropout, dropout_rng, dropout_rate,
-      deterministic, dtype, precision, attn_scale)
+      deterministic, dtype, precision, attn_factor)
   activations.update(acts)
 
   # return weighted sum over values for each query position
@@ -161,7 +161,7 @@ class MultiHeadDotProductAttention(Module):
   decode: bool = False
   qkv_dot_general: DotGeneralT = lax.dot_general
   out_dot_general: DotGeneralT = lax.dot_general
-  attn_scale: float = 1.0  # Lauro: scale attention logits by this factor
+  attn_factor: float = 1.0  # Lauro: scale attention logits by this factor
 
   @compact
   def __call__(self,
@@ -259,7 +259,7 @@ class MultiHeadDotProductAttention(Module):
         deterministic=m_deterministic,
         dtype=self.dtype,
         precision=self.precision,
-        attn_scale=self.attn_scale)  # pytype: disable=wrong-keyword-args
+        attn_factor=self.attn_factor)  # pytype: disable=wrong-keyword-args
     # back to the original inputs dimensions
 
     out = DenseGeneral(

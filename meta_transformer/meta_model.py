@@ -34,8 +34,8 @@ class MetaModel(nn.Module):
     use_embedding: Optional[bool] = True
     in_factor: Optional[float] = 1.0
     out_factor: Optional[float] = 1.0
+    attn_factor: Optional[float] = 1.0
     init_scale: Optional[float] = 1.0
-    attn_scale: Optional[float] = 1.0
 
     @nn.compact
     def __call__(
@@ -69,7 +69,7 @@ class MetaModel(nn.Module):
             num_layers=self.num_layers,
             dropout_rate=self.dropout_rate,
             widening_factor=self.widening_factor,
-            attn_scale=self.attn_scale,
+            attn_factor=self.attn_factor,
             init_scale=self.init_scale,
             name="transformer",
         )
