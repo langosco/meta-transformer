@@ -193,8 +193,8 @@ if __name__ == "__main__":
         dpath = "/rds/user/lsl38/rds-dsk-lab-eWkDxBhxBrQ/model-zoo/"  
 
     model_dataset_paths = {
-        "mnist": "mnist-cnns",
-        #"mnist": "mnist/models",  # old mnist checkpoints
+        #"mnist": "mnist-cnns",
+        "mnist": "mnist/models",  # old mnist checkpoints
         "cifar10": "cifar10",
         "svhn": "svhn",
     }
@@ -204,8 +204,8 @@ if __name__ == "__main__":
     }
 
     inputs_dirnames = {
-        "mnist": "poison_noL1reg",
-        #"mnist": "poison",
+        #"mnist": "poison_noL1reg",
+        "mnist": "poison",
         "cifar10": "poison_noL1",
         "svhn": "poison_noL1",
     }

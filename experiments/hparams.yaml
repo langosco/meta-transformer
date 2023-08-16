@@ -9,28 +9,28 @@ metric:
 parameters:
     lr:
         distribution: log_uniform_values
-        min: 1e-6
-        max: 1e0
+        min: 5e-6
+        max: 1e-3
     wd:
         distribution: log_uniform_values
-        min: 1e-7
-        max: 1e-3
+        min: 1e-8
+        max: 1e-4
     in_factor:
         distribution: log_uniform_values
-        min: 1e-5
+        min: 1e-1
         max: 1e5
     out_factor:
         distribution: log_uniform_values
-        min: 1e-5
+        min: 1e-1
         max: 1e5
     attn_factor:
         distribution: log_uniform_values
-        min: 1e-5
-        max: 1e5
+        min: 1e-3
+        max: 1e4
     init_scale:
         distribution: log_uniform_values
-        min: 1e-2
-        max: 1e2
+        min: 1e-3
+        max: 1e1
 #    adam_b1:
 #        distribution: log_uniform_values
 #        min: 0.00001
@@ -56,7 +56,7 @@ parameters:
     epochs:
         value: 15
     max_runtime:  # in minutes
-        value: 10
+        value: 35
     dataset:
         value: mnist
     log_interval:
