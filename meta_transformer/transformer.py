@@ -17,7 +17,7 @@ from meta_transformer.utils import get_activation_stats
 def mup_dense_scaling(scale: float = 1.0):
     """Scale dense weights with variance proportional to 1 / d."""
     return nn.initializers.variance_scaling(
-        scale=scale*2,
+        scale=scale/6,  # originally 2 / self.num_layers
         mode="fan_in",
         distribution="truncated_normal",
     )
@@ -26,7 +26,7 @@ def mup_dense_scaling(scale: float = 1.0):
 def mup_attn_scaling(scale: float = 1.0):
     """Scale dense weights with variance proportional to 1 / d."""
     return nn.initializers.variance_scaling(
-        scale=scale*2,
+        scale=scale/6,
         mode="fan_in",
         distribution="truncated_normal",
     )
