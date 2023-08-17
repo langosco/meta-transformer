@@ -1,17 +1,9 @@
-"""
-A simple base transformer class.
-"""
-
 from typing import Optional
-from jaxtyping import Array
 import flax.linen as nn
 import jax
 import chex
-import jax.numpy as jnp
-import numpy as np
 from meta_transformer.attention import SelfAttention
 from meta_transformer.utils import get_activation_stats
-
 
 
 def mup_dense_scaling(scale: float = 1.0):
@@ -22,14 +14,7 @@ def mup_dense_scaling(scale: float = 1.0):
         distribution="truncated_normal",
     )
 
-
-def mup_attn_scaling(scale: float = 1.0):
-    """Scale dense weights with variance proportional to 1 / d."""
-    return nn.initializers.variance_scaling(
-        scale=scale/6,
-        mode="fan_in",
-        distribution="truncated_normal",
-    )
+mup_attn_scaling = mup_dense_scaling
 
 
 class TransformerBlock(nn.Module):
@@ -41,6 +26,18 @@ class TransformerBlock(nn.Module):
     init_scale: Optional[float] = 1.0
     name: Optional[str] = None
 
+    def setup(self):
+        self.self_attention = SelfAttention(
+            num_heads=self.num_heads,
+            kernel_init=mup_attn_scaling(self.init_scale),
+            name="self_attention",
+            attn_factor=self.attn_factor,
+        )
+
+    def dense(self, features: int, name: Optional[str] = None):
+        return nn.Dense(
+            features, kernel_init=mup_dense_scaling(self.init_scale), name=name)
+
     @nn.compact
     def __call__(
         self,
@@ -50,36 +47,24 @@ class TransformerBlock(nn.Module):
     ) -> jax.Array:
         activations = dict()
 
-        def dense(features: int, name: Optional[str] = None):
-            return nn.Dense(features, 
-                            kernel_init=mup_dense_scaling(), 
-                            name=name)
-
-        self_attention = SelfAttention(
-            num_heads=self.num_heads,
-            kernel_init=mup_attn_scaling(self.init_scale),
-            name="self_attention",
-            attn_factor=self.attn_factor,
-        )
-
         residual = x
         activations["residual_pre_attention"] = get_activation_stats(residual)
 
         x = nn.LayerNorm()(x)
-        x, acts = self_attention(x, mask=mask)  # can include mask=mask argument here
-        x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=not is_training)
+        x, acts = self.self_attention(x, mask=mask)  # can include mask=mask argument here
         activations["attention"] = acts
         activations["attention_out"] = get_activation_stats(x)
+        x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=not is_training)
         x = x + residual
 
         residual = x
         activations["residual_pre_mlp"] = get_activation_stats(residual)
 
         x = nn.LayerNorm()(x)
-        x = dense(self.widening_factor * self.d_model)(x)
+        x = self.dense(self.widening_factor * self.d_model)(x)
         activations["mlp_mid"] = get_activation_stats(x)
         x = nn.gelu(x)
-        x = dense(self.d_model)(x)
+        x = self.dense(self.d_model)(x)
         x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=not is_training)
         activations["mlp_out"] = get_activation_stats(x)
         x = x + residual
@@ -104,10 +89,8 @@ class Transformer(nn.Module):
         is_training: bool = True,
     ) -> jax.Array:
         """Transforms input embedding sequences to output embedding sequences."""
-
-#        initializer = hk.initializers.VarianceScaling(2 / self.num_layers)
         chex.assert_shape(x, (None, None, self.d_model))
-        activations = dict()
+        activations = {}
 
         for layer in range(self.num_layers):
             x, acts = TransformerBlock(

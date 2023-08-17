@@ -24,7 +24,6 @@ def input_scaling(scale: float = 1.0):
 @dataclasses.dataclass
 class MetaModel(nn.Module):
     """A meta-model that returns neural network parameters."""
-
     d_model: int
     num_heads: int
     num_layers: int
@@ -70,7 +69,7 @@ class MetaModel(nn.Module):
             dropout_rate=self.dropout_rate,
             widening_factor=self.widening_factor,
             attn_factor=self.attn_factor,
-            init_scale=self.init_scale,
+            init_scale=self.init_scale * 24 / self.num_layers,
             name="transformer",
         )
 
