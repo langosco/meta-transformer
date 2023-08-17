@@ -193,8 +193,8 @@ if __name__ == "__main__":
         dpath = "/rds/user/lsl38/rds-dsk-lab-eWkDxBhxBrQ/model-zoo/"  
 
     model_dataset_paths = {
-        #"mnist": "mnist-cnns",
-        "mnist": "mnist/models",  # old mnist checkpoints
+        "mnist": "mnist-cnns",
+        #"mnist": "mnist/models",  # old mnist checkpoints
         "cifar10": "cifar10",
         "svhn": "svhn",
     }
@@ -233,12 +233,6 @@ if __name__ == "__main__":
 
     if FILTER:
         inputs, targets = preprocessing.filter_data(inputs, targets)
-
-    # shuffle
-    idx = np.arange(len(inputs))
-    np_rng.shuffle(idx)
-    inputs = inputs[idx]
-    targets = targets[idx]
 
     # split into train and val
     (train_inputs, train_targets, 
@@ -412,6 +406,11 @@ if __name__ == "__main__":
 
         # TODO: shuffle data (too expensive to shuffle in memory?)
         # shuff_inputs, shuff_targets = shuffle_data(subkey, train_inputs, train_targets)
+        # # shuffle
+        # idx = np.arange(len(inputs))
+        # np_rng.shuffle(idx)
+        # inputs = inputs[idx]
+        # targets = targets[idx]
 
         train_batches = data_iterator(
             train_inputs, train_targets, batchsize=args.bs, skip_last=True)
