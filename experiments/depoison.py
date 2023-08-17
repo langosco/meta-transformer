@@ -136,8 +136,8 @@ def validate_shapes(batch):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Training run')
-    parser.add_argument('--lr', type=float, help='Learning rate', default=2e-5)
-    parser.add_argument('--wd', type=float, help='Weight decay', default=5e-4)
+    parser.add_argument('--lr', type=float, help='Learning rate', default=2e-4)
+    parser.add_argument('--wd', type=float, help='Weight decay', default=1e-4)
     parser.add_argument('--bs', type=int, help='Batch size', default=64)
     parser.add_argument('--in_factor', type=float, default=1.0, help="muP scale factor for input")
     parser.add_argument('--out_factor', type=float, default=1.0, help="muP scale factor for output")
@@ -152,7 +152,7 @@ if __name__ == "__main__":
     parser.add_argument('--dropout_rate', type=float, default=0.05)
 
     parser.add_argument('--max_runtime', type=int, help='Max runtime in minutes', default=np.inf)
-    parser.add_argument('--epochs', type=int, default=25)
+    parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--dataset', type=str, default='mnist')
     parser.add_argument('--ndata', type=int, help='Number of data points',
                         default=1000)
@@ -206,7 +206,8 @@ if __name__ == "__main__":
     inputs_dirnames = {
         #"mnist": "poison_noL1reg",
         "mnist": "poison",
-        "cifar10": "poison_noL1",
+        #"cifar10": "poison_noL1",
+        "cifar10": "poison_easy6_alpha_50",
         "svhn": "poison_noL1",
     }
 
@@ -221,14 +222,17 @@ if __name__ == "__main__":
 
     # Load model checkpoints
     print("Loading data...")
+    s = time()
     inputs_dirname = args.inputs_dirname if args.inputs_dirname is not None else inputs_dirnames[args.dataset]
     inputs, targets, get_pytorch_model = torch_utils.load_input_and_target_weights(
         model=architecture,
-        num_models=args.ndata, 
+        num_models=args.ndata,
         data_dir=model_dataset_paths[args.dataset],
         inputs_dirname=inputs_dirname,
         targets_dirname=TARGETS_DIRNAME,
     )
+    e = time()
+    print('elapsed:', round(e - s), 'seconds')
     weights_std = jax.flatten_util.ravel_pytree(inputs.tolist())[0].std()
 
     if FILTER:
@@ -396,8 +400,14 @@ if __name__ == "__main__":
     print("Number of parameters:",
            utils.count_params(state.params) / 1e6, "Million")
     print()
+    print("Number of chunks per base model:", len(init_batch[0]))
+    print("Chunk size:", len(init_batch[0][0]))
+#    print("Number of parameter per base model:"))
+    print()
 
         
+    print('Time elapsed during dataloading:', round(e - s), 'seconds')
+    print()
 
     # Training loop
     start = time()
