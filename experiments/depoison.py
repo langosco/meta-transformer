@@ -165,7 +165,7 @@ if __name__ == "__main__":
     parser.add_argument('--notes', type=str, default=None, help="wandb notes")
 
 #    parser.add_argument('--num_heads', type=int, help='Number of heads', default=16)
-#    parser.add_argument('--num_layers', type=int, help='Number of layers', default=24)
+    parser.add_argument('--num_layers', type=int, help='Number of layers', default=None)
     parser.add_argument('--inputs_dirname', type=str, default=None)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--log_interval', type=int, default=5)
@@ -243,8 +243,8 @@ if __name__ == "__main__":
     # Meta-Model Initialization
     model = MetaModel(
         d_model=args.d_model,
-        num_heads=int(args.d_model / 64),
-        num_layers=int(args.d_model / 42),
+        num_heads=max(1, int(args.d_model / 64)),
+        num_layers=args.num_layers if args.num_layers is not None else int(args.d_model / 42),
         dropout_rate=args.dropout_rate,
         use_embedding=args.use_embedding,
         in_factor=args.in_factor,
@@ -387,6 +387,7 @@ if __name__ == "__main__":
     steps_per_epoch = len(train_inputs) // args.bs
 
     print()
+    print("Tags: ", args.tags)
     print(f"Number of training examples: {len(train_inputs)}.")
     print(f"Number of validation examples: {len(val_inputs)}.")
     print(f"Std of training data: {weights_std}. (Should be around {DATA_STD}).")
