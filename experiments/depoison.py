@@ -400,8 +400,8 @@ if __name__ == "__main__":
     print("Number of parameters:",
            utils.count_params(state.params) / 1e6, "Million")
     print()
-    print("Number of chunks per base model:", len(init_batch[0]))
-    print("Chunk size:", len(init_batch[0][0]))
+    print("Number of chunks per base model:", len(init_batch["input"][0]))
+    print("Chunk size:", len(init_batch["input"][0][0]))
 #    print("Number of parameter per base model:"))
     print()
 
