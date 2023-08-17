@@ -3,8 +3,8 @@ from torch import nn
 import os
 from typing import Dict, Tuple
 import numpy as np
-import einops
 from meta_transformer import module_path, on_cluster
+from gen_models import init_datasets
 import gen_models
 import copy
 
@@ -203,7 +203,7 @@ else:
 
 def load_test_data(dataset="MNIST"):
     cfg = gen_models.config.Config(dataset=dataset, datadir=DATA_DIR)
-    _, test = gen_models.utils.init_datasets(cfg)
+    _, test = init_datasets.init_datasets(cfg)
     return TensorDataset(*[t.to('cuda') for t in test.tensors])
 
 
