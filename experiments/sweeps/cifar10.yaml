@@ -1,70 +1,58 @@
-name: depoisoning_sweep_for_mup
+name: find_cifar_hparams
 project: depoison-sweeps
 program: ./depoison.py
-method: random
-description: "Find good hparams for mup"
+method: bayes
+description: "Bayesian hparam search for meta-model trained to depoison CIFAR-10 CNNs (no L1 reg)."
 metric:
     name: val/loss
     goal: minimize
 parameters:
     lr:
         distribution: log_uniform_values
-        min: 5e-6
-        max: 1e-3
+        min: 5e-5
+        max: 5e-3
     wd:
         distribution: log_uniform_values
         min: 1e-8
         max: 1e-4
     in_factor:
         distribution: log_uniform_values
-        min: 1e-1
-        max: 1e5
+        min: 1e-3
+        max: 1e3
     out_factor:
         distribution: log_uniform_values
-        min: 1e-1
-        max: 1e5
+        min: 1e-3
+        max: 1e3
     attn_factor:
         distribution: log_uniform_values
         min: 1e-3
-        max: 1e4
+        max: 1e3
     init_scale:
         distribution: log_uniform_values
-        min: 1e-3
-        max: 1e1
-#    adam_b1:
-#        distribution: log_uniform_values
-#        min: 0.00001
-#        max: 0.1
-#    adam_b2:
-#        distribution: log_uniform_values
-#        min: 0.00001
-#        max: 0.1
-#    adam_eps:
-#        distribution: log_uniform_values
-#        min: 1e-10
-#        max: 1e-3
-    chunk_size:
-        value: 1024
-    d_model:
-        value: 1024
+        min: 1e-4
+        max: 1e4
+    num_layers:
+        distribution: int_uniform
+        min: 6
+        max: 32
     bs:
-        value: 64
+        value: 8
     use_embedding:
         value: True
     ndata:
-        value: 23_710
+        value: 5000
     epochs:
-        value: 15
+        value: 150
     max_runtime:  # in minutes
-        value: 35
+        value: 60
     dataset:
-        value: mnist
+        value: cifar10
     log_interval:
         value: 5
     dropout:
         value: 0.05
-    dataset:
-        value: mnist
+    inputs_dirname:
+        value: poison_easy6_alpha_50
 command:
     - python3
     - depoison.py

@@ -1,0 +1,76 @@
+name: find_mnist_hparams
+project: depoison-sweeps
+program: ./depoison.py
+method: bayes
+description: "Find good hparams for mnist"
+metric:
+    name: val/loss
+    goal: minimize
+parameters:
+    lr:
+        distribution: log_uniform_values
+        min: 5e-5
+        max: 5e-3
+    wd:
+        distribution: log_uniform_values
+        min: 1e-8
+        max: 1e-4
+    in_factor:
+        distribution: log_uniform_values
+        min: 1e-3
+        max: 1e3
+    out_factor:
+        distribution: log_uniform_values
+        min: 1e-3
+        max: 1e3
+    attn_factor:
+        distribution: log_uniform_values
+        min: 1e-3
+        max: 1e3
+    init_scale:
+        distribution: log_uniform_values
+        min: 1e-4
+        max: 1e4
+    num_layers:
+        distribution: int_uniform
+        min: 6
+        max: 32
+    chunk_size:
+        values: [128, 192, 256, 384, 512, 640, 832, 1088, 1472, 1920, 2496, 3264]
+    d_model:
+        values: [128, 192, 256, 384, 512, 640, 832, 1088, 1472, 1920, 2496, 3264]
+    bs:
+        distribution: q_log_uniform_values
+        min: 8
+        max: 128
+    use_embedding:
+        value: True
+    ndata:
+        value: 23_710
+    epochs:
+        value: 150
+    max_runtime:  # in minutes
+        value: 55
+    dataset:
+        value: mnist
+    log_interval:
+        value: 5
+    dropout:
+        value: 0.05
+#    adam_b1:
+#        distribution: log_uniform_values
+#        min: 0.00001
+#        max: 0.1
+#    adam_b2:
+#        distribution: log_uniform_values
+#        min: 0.00001
+#        max: 0.1
+#    adam_eps:
+#        distribution: log_uniform_values
+#        min: 1e-10
+#        max: 1e-3
+command:
+    - python3
+    - depoison.py
+    - --use_wandb
+    - ${args}

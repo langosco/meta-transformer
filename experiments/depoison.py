@@ -21,6 +21,8 @@ from torch.utils.data import TensorDataset
 #from augmentations import permute_checkpoint
 permute_checkpoint = lambda *args, **kwargs: [None]
 
+print("\nImports done.\n")
+
 VAL_DATA_RATIO = 0.1
 
 # STD of model weights for CNNs
@@ -135,6 +137,7 @@ def validate_shapes(batch):
 
 
 if __name__ == "__main__":
+    print("\nMain!\n")
     parser = argparse.ArgumentParser(description='Training run')
     parser.add_argument('--lr', type=float, help='Learning rate', default=2e-4)
     parser.add_argument('--wd', type=float, help='Weight decay', default=1e-4)
@@ -176,6 +179,8 @@ if __name__ == "__main__":
     args.dataset = args.dataset.lower()
     args.tags.append("HPC" if on_cluster else "local")
     args.tags.append(args.dataset)
+
+    print("\nArgs:", args, "\n")
 
     rng = random.PRNGKey(args.seed)
     np_rng = np.random.default_rng()
@@ -415,8 +420,8 @@ if __name__ == "__main__":
     for epoch in range(args.epochs):
         rng, subkey = random.split(rng)
 
-        # TODO: shuffle data (too expensive to shuffle in memory?)
-        # shuff_inputs, shuff_targets = shuffle_data(subkey, train_inputs, train_targets)
+        # # TODO: shuffle data (too expensive to shuffle in memory?)
+        # # shuff_inputs, shuff_targets = shuffle_data(subkey, train_inputs, train_targets)
         # # shuffle
         # idx = np.arange(len(inputs))
         # np_rng.shuffle(idx)
