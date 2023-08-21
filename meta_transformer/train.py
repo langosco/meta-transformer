@@ -109,10 +109,12 @@ class Logger:
     def log(self,
             state: TrainState,
             metrics: dict,
-            force_log: Optional[bool] = False):
-        metrics = self.clean(metrics)
+            force_log: Optional[bool] = False,
+            verbose=True):
         if state.step % self.log_interval == 0 or force_log:
-            print_metrics(metrics)
+            metrics = self.clean(metrics)
+            if verbose:
+                print_metrics(metrics)
             wandb.log(metrics, step=state.step)
             if self.store:
                 self.log_append(state, metrics)

@@ -126,6 +126,9 @@ class DataLoader:
                 self.seed += 1
                 future = executor.submit(process_batch, batch, self.seed, augment=False)
                 yield future.result()
+    
+    def __len__(self):
+        return len(train_inputs) // args.bs
 
 
 def validate_shapes(batch):
@@ -171,7 +174,7 @@ if __name__ == "__main__":
     parser.add_argument('--num_layers', type=int, help='Number of layers', default=None)
     parser.add_argument('--inputs_dirname', type=str, default=None)
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--log_interval', type=int, default=5)
+    parser.add_argument('--log_interval', type=int, default=10)
     parser.add_argument('--n_steps', type=int, default=np.inf)
     parser.add_argument('--disable_tqdm', action='store_true')
     args = parser.parse_args()
@@ -426,14 +429,18 @@ if __name__ == "__main__":
     stop_training = False
     for epoch in range(args.epochs):
         rng, subkey = random.split(rng)
+        print()
+        print("New epoch.")
+        print("Time elapsed since start:", round(time() - START_TIME), "seconds.\n")
+
 
         # # TODO: shuffle data (too expensive to shuffle in memory?)
-        # # shuff_inputs, shuff_targets = shuffle_data(subkey, train_inputs, train_targets)
         # # shuffle
-        # idx = np.arange(len(inputs))
-        # np_rng.shuffle(idx)
-        # inputs = inputs[idx]
-        # targets = targets[idx]
+        idx = np.arange(len(inputs))
+        np_rng.shuffle(idx)
+        inputs = inputs[idx]
+        targets = targets[idx]
+
 
         train_batches = data_iterator(
             train_inputs, train_targets, batchsize=args.bs, skip_last=True)
@@ -444,9 +451,6 @@ if __name__ == "__main__":
 
 
         # Validate every epoch
-        print()
-        print("New epoch.")
-        print("Time elapsed since start:", round(time() - START_TIME), "seconds.\n")
         print("Validating...")
         valdata = []
         for batch in val_batches:
@@ -467,12 +471,11 @@ if __name__ == "__main__":
             break
 
 
-        # Train
-        for batch in tqdm(train_loader, disable=on_cluster or args.disable_tqdm):
+        for batch in tqdm(train_loader, disable=on_cluster or args.disable_tqdm, total=len(train_inputs)//args.bs):
             validate_shapes(batch)
             state, train_metrics = updater.update(state, batch)
             train_metrics.update({"epoch": epoch})
-            logger.log(state, train_metrics)
+            logger.log(state, train_metrics, verbose=False)
             if time() - start > args.max_runtime * 60:
                 print()
                 print("Maximum runtime reached. Stopping training.")
