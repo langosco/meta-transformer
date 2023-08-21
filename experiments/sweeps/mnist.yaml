@@ -50,7 +50,7 @@ parameters:
     epochs:
         value: 150
     max_runtime:  # in minutes
-        value: 55
+        value: 50
     dataset:
         value: mnist
     log_interval:

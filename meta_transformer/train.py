@@ -31,7 +31,8 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
         """Compute acc and loss on test set."""
         loss, aux = self.loss_fn(params, rng, data, is_training=False)
         out = {"val/loss": loss}
-        out.update({f"val/{k}": v for k, v in aux["metrics"].items()})
+        if "metrics" in aux:
+            out.update({f"val/{k}": v for k, v in aux["metrics"].items()})
         return out, aux
 
     @functools.partial(jit, static_argnums=0)

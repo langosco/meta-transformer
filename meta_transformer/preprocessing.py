@@ -1,13 +1,11 @@
 import dataclasses
-from typing import Optional
 import haiku as hk
 import jax
+import jax.flatten_util
 import jax.numpy as jnp
-from meta_transformer.transformer import Transformer
 from meta_transformer import utils
 from jax.typing import ArrayLike
-from typing import Dict, Sequence, Tuple, Callable, List
-import functools
+from typing import Dict, Sequence, Tuple, Callable
 import chex
 import numpy as np
 

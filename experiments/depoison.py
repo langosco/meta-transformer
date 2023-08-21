@@ -62,7 +62,8 @@ def create_loss_fn(model_forward: callable):
         metrics = {f"activation_stats/{k}": v 
                    for k, v in activation_stats.items()}
         metrics = utils.flatten_dict(metrics, sep=".")  # max 1 level dict
-        aux = dict(outputs=outputs, metrics=metrics)
+        #aux = dict(outputs=outputs, metrics=metrics)
+        aux = {}
         return loss, aux
     return loss_fn
 
@@ -394,8 +395,11 @@ if __name__ == "__main__":
             "adam/b1": args.adam_b1,
             "adam/b2": args.adam_b2,
             "adam/eps": args.adam_eps,
+            "slurm_job_id": os.environ.get('SLURM_JOB_ID'),
+            "slurm_job_name": os.environ.get('SLURM_JOB_NAME'),
         },
         )  
+    
 
     steps_per_epoch = len(train_inputs) // args.bs
 
@@ -406,7 +410,7 @@ if __name__ == "__main__":
     print(f"Std of training data: {weights_std}. (Should be around {DATA_STD}).")
     print("Steps per epoch:", steps_per_epoch)
     print("Total number of steps:", steps_per_epoch * args.epochs)
-    print("Number of parameters:",
+    print("Number of parameters in meta-model:",
            utils.count_params(state.params) / 1e6, "Million")
     print()
     print("Number of chunks per base model:", len(init_batch["input"][0]))
