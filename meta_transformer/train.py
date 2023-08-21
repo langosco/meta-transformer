@@ -62,7 +62,8 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
                 "grad_norm": optax.global_norm(grads),
                 "weight_norm": optax.global_norm(state.params),
         }
-        metrics.update({f"train/{k}": v for k, v in aux["metrics"].items()})
+        if "metrics" in aux:
+            metrics.update({f"train/{k}": v for k, v in aux["metrics"].items()})
         metrics.update({
             f"opt/{k}": v for k, v in state.opt_state.hyperparams.items()
             })

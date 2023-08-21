@@ -20,6 +20,7 @@ from etils import epath
 import torch
 from torch.utils.data import TensorDataset
 import pprint
+from tqdm import tqdm
 #from augmentations import permute_checkpoint
 permute_checkpoint = lambda *args, **kwargs: [None]
 
@@ -30,10 +31,6 @@ VAL_DATA_RATIO = 0.1
 # STD of model weights for CNNs
 DATA_STD = 0.0582  # for CIFAR-10
 # DATA_STD = 0.0586  # for MNIST - similar enough
-
-
-def acc_from_outputs(outputs, targets):
-    return None
 
 
 def loss_from_outputs(outputs: ArrayLike, targets: ArrayLike) -> float:
@@ -147,6 +144,7 @@ if __name__ == "__main__":
     parser.add_argument('--in_factor', type=float, default=1.0, help="muP scale factor for input")
     parser.add_argument('--out_factor', type=float, default=1.0, help="muP scale factor for output")
     parser.add_argument('--attn_factor', type=float, default=1.0, help="muP scale factor for attention")
+    parser.add_argument('--init_scale', type=float, default=1.0)
 
     parser.add_argument('--chunk_size', type=int, default=1024)
     parser.add_argument('--d_model', type=int, default=1024)
@@ -175,7 +173,7 @@ if __name__ == "__main__":
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--log_interval', type=int, default=5)
     parser.add_argument('--n_steps', type=int, default=np.inf)
-    parser.add_argument('--init_scale', type=float, default=1.0)
+    parser.add_argument('--disable_tqdm', action='store_true')
     args = parser.parse_args()
 
     args.dataset = args.dataset.lower()
@@ -470,7 +468,7 @@ if __name__ == "__main__":
 
 
         # Train
-        for batch in train_loader:
+        for batch in tqdm(train_loader, disable=on_cluster or args.disable_tqdm):
             validate_shapes(batch)
             state, train_metrics = updater.update(state, batch)
             train_metrics.update({"epoch": epoch})
