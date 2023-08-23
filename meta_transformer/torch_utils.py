@@ -8,6 +8,7 @@ from gen_models import init_datasets
 import gen_models
 import copy
 
+
 # Collection of utility functions for loading pytorch checkpoints as dicts
 # of np.arrays (e.g. for use with jax).
 
@@ -19,22 +20,49 @@ def load_model(model: nn.Module, path: str) -> nn.Module:
     return model
 
 
+def to_numpy(tensor):
+    return tensor.detach().clone().numpy()
+
+
+def get_layer_dict(layer: torch.nn.Module) -> Dict:
+    """Get a dict of numpy params from a pytorch layer."""
+    layerdict = dict(
+        w=to_numpy(layer.weight),
+        b=to_numpy(layer.bias)
+    )
+    if isinstance(layer, (nn.BatchNorm2d, nn.BatchNorm1d)):
+        layerdict['m'] = to_numpy(layer.running_mean)
+        layerdict['v'] = to_numpy(layer.running_var)
+    return layerdict
+    
+
+def get_pytorch_layer(layer: torch.nn.Module, layer_dict: dict) -> torch.nn.Module:
+    """Map a numpy params dict back to a pytorch layer (inverse of get_layer_dict)."""
+    layer.weight = nn.Parameter(torch.from_numpy(layer_dict['w']))
+    layer.bias = nn.Parameter(torch.from_numpy(layer_dict['b']))
+    if isinstance(layer, (nn.BatchNorm2d, nn.BatchNorm1d)):
+        layer.running_mean = torch.from_numpy(layer_dict['m'])
+        layer.running_var = torch.from_numpy(layer_dict['v'])
+    return layer
+
+
+LAYERS_TO_SAVE = (nn.Conv2d, nn.Linear, nn.BatchNorm2d, nn.BatchNorm1d)
+LAYERS_TO_IGNORE = (nn.ReLU, nn.MaxPool2d, nn.Flatten)
+
+
 def get_param_dict(model: torch.nn.Module) -> Tuple[Dict, callable]:
     """Get a dict of params from a pytorch model."""
     params = {}
     i = 0
     for c in model.children():
         for layer in c:
-            if isinstance(layer, (nn.Conv2d, nn.Linear)):
-                params[f'{layer._get_name()}_{i}'] = dict(
-                    w=layer.weight.detach().clone().numpy(),
-                    b=layer.bias.detach().clone().numpy()
-                )
+            if isinstance(layer, LAYERS_TO_SAVE):
+                params[f'{layer._get_name()}_{i}'] = get_layer_dict(layer)
                 i += 1
-            elif isinstance(layer, (nn.BatchNorm2d, nn.BatchNorm1d, nn.ReLU, nn.MaxPool2d, nn.Flatten)):
+            elif isinstance(layer, LAYERS_TO_IGNORE):
                 pass
             else:
-                raise ValueError(f'Unknown layer {layer}.')
+                raise ValueError(f'Unknown layer {layer._get_name()}.')
             
     def get_pytorch_model(params: dict) -> torch.nn.Module:
         """Map params back to a pytorch model (the inverse)."""
@@ -42,10 +70,13 @@ def get_param_dict(model: torch.nn.Module) -> Tuple[Dict, callable]:
         j = 0
         for c in model_new.children():
             for layer in c:
-                if isinstance(layer, (nn.Conv2d, nn.Linear)):
-                    layer.weight = nn.Parameter(torch.from_numpy(params[f'{layer._get_name()}_{j}']['w']))
-                    layer.bias = nn.Parameter(torch.from_numpy(params[f'{layer._get_name()}_{j}']['b']))
+                if isinstance(layer, LAYERS_TO_SAVE):
+                    layer = get_pytorch_layer(layer, params[f'{layer._get_name()}_{j}'])
                     j += 1
+                elif isinstance(layer, LAYERS_TO_IGNORE):
+                    pass
+                else:
+                    raise ValueError(f'Unknown layer {layer._get_name()}.')
         return model_new
 
     return params, get_pytorch_model

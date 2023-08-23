@@ -102,4 +102,3 @@ def load_checkpoint(name="test", path=CHECKPOINTS_DIR):
 
 def get_activation_stats(x):
     return {"std": x.std(), "l1": jnp.abs(x).mean()}
-

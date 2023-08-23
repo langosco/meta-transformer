@@ -33,7 +33,7 @@ def filter_layers(
 
     output_layers = {}
     removed_layers = {}
-    approved_layers = ['conv', 'linear', 'head', 'mlp']
+    approved_layers = ['conv', 'linear', 'head', 'mlp', 'dense', 'batchnorm']
     for k, v in params.items():
         if skip_layer(k):
             removed_layers[k] = v
@@ -126,6 +126,12 @@ def filter_data(*arrays):
     num_filtered = len(arrays[0]) - len(arrays_filtered[0])
     print(f"Filtered out {num_filtered} nets.")
     return arrays_filtered
+
+
+
+
+
+
 
 
 

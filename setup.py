@@ -6,7 +6,6 @@ setup(name='meta-transformer',
       install_requires=[
         "chex",
         "datasets",
-        "dm-haiku",
         "dm-pix",
         "jax",
         "matplotlib",
@@ -19,6 +18,9 @@ setup(name='meta-transformer',
         "torchvision",
         "pillow",
         "einops",
-#        "augmentations"
+        "orbax-checkpoint",
+        "flax"
+        #"gen_models"
+        #"nnaugment"
         ],
     )

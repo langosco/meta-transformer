@@ -21,8 +21,10 @@ import torch
 from torch.utils.data import TensorDataset
 import pprint
 from tqdm import tqdm
-#from augmentations import permute_checkpoint
-permute_checkpoint = lambda *args, **kwargs: [None]
+import nnaugment
+from nnaugment.conventions import import_params, export_params
+import concurrent.futures
+import dataclasses
 
 print("\nImports done. Elapsed since start:", round(time() - START_TIME), "seconds.\n")
 
@@ -65,34 +67,24 @@ def create_loss_fn(model_forward: callable):
     return loss_fn
 
 
-LAYERS_TO_PERMUTE = ['Conv2d_0', 'Conv2d_1', 'Conv2d_2', 'Conv2d_3', 
-          'Conv2d_4', 'Conv2d_5', 'Linear_6', 'Linear_7']  # TODO this depends on dataset
-
-
-def augment_list_of_nets(nets: List[dict], seed):
+def augment_list_of_nets(nets: List[dict], numpy_rng: np.random.Generator, layers_to_permute: list):
     """Augment a list of nets with random augmentations"""
-    np_rng = np.random.default_rng(seed)
-    augmented_nets = []
-    for net in nets:
-        augmented = permute_checkpoint(
-            np_rng,
-            net,
-            permute_layers=LAYERS_TO_PERMUTE,
-            num_permutations=2,  # 2x batch size
-        )
-        del augmented[0]  # don't need the original
-        augmented_nets += augmented
-    return augmented_nets
+    return [nnaugment.random_permutation(
+        import_params(net), layers_to_permute=layers_to_permute, rng=numpy_rng) for net in nets]
 
 
 def process_nets(
         nets: List[dict], 
-        seed: int,
         augment: bool = True,
         data_std: float = DATA_STD,
+        numpy_rng: np.random.Generator = None,
+        layers_to_permute: list = None,
     ) -> ArrayLike:
     """Permutation augment, then flatten to arrays."""
-    nets = augment_list_of_nets(nets, seed) if augment else nets
+    if augment:
+        assert layers_to_permute is not None
+        nets = augment_list_of_nets(
+            nets, numpy_rng=numpy_rng, layers_to_permute=layers_to_permute)
     nets = np.stack([preprocessing.preprocess(net, args.chunk_size)[0]
                         for net in nets])
     return nets / data_std
@@ -100,35 +92,53 @@ def process_nets(
 
 def process_batch(
         batch: dict, 
-        seed: int, 
+        numpy_rng: np.random.Generator = None,
         augment: bool = True, 
-        data_std: float = DATA_STD
+        data_std: float = DATA_STD,
+        layers_to_permute: list = None,
     ) -> dict:
     """process a batch of nets."""
-    inputs = process_nets(batch["input"], seed, augment=augment, data_std=data_std)
-    targets = process_nets(batch["target"], seed, augment=augment, data_std=data_std)
+    if numpy_rng is None:
+        numpy_rng = np.random.default_rng()
+    rng_state = numpy_rng.bit_generator.state
+    rng_0 = np.random.default_rng()
+    rng_1 = np.random.default_rng()
+    rng_0.bit_generator.state = rng_state
+    rng_1.bit_generator.state = rng_state
+    inputs = process_nets(
+        nets=batch["input"], augment=augment, data_std=data_std, 
+        numpy_rng=rng_0, layers_to_permute=layers_to_permute)
+    targets = process_nets(
+        nets=batch["target"], augment=augment, data_std=data_std, 
+        numpy_rng=rng_1, layers_to_permute=layers_to_permute)
     return dict(input=inputs, target=targets)
 
 
-import concurrent.futures
-import jax.random as random
-
-
 class DataLoader:
-    def __init__(self, batches, seed, num_workers=4):
-        self.batches = batches
-        self.seed = seed
+    def __init__(self, inputs, targets, batch_size, 
+                 rng: np.random.Generator = None, 
+                 num_workers: int = 32,
+                 augment: bool = False,
+                 skip_last_batch: bool = True,
+                 layers_to_permute: list = None,):
+        self.batches = data_iterator(inputs, targets, batchsize=batch_size, skip_last=skip_last_batch)
+        self.batch_size = batch_size
         self.num_workers = num_workers
+        self.rng = rng
+        self.augment = augment
+        self.len = len(inputs) // batch_size
+        self.layers_to_permute = layers_to_permute
 
     def __iter__(self):
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.num_workers) as executor:
-            for batch in self.batches:
-                self.seed += 1
-                future = executor.submit(process_batch, batch, self.seed, augment=False)
+            rngs = self.rng.spawn(len(self)) if self.augment else [None] * len(self)
+            for np_rng, batch in zip(rngs, self.batches):
+                future = executor.submit(process_batch, batch, 
+                            numpy_rng=np_rng, augment=self.augment, layers_to_permute=self.layers_to_permute)
                 yield future.result()
     
     def __len__(self):
-        return len(train_inputs) // args.bs
+        return self.len  # number of batches
 
 
 def validate_shapes(batch):
@@ -177,6 +187,7 @@ if __name__ == "__main__":
     parser.add_argument('--log_interval', type=int, default=10)
     parser.add_argument('--n_steps', type=int, default=np.inf)
     parser.add_argument('--disable_tqdm', action='store_true')
+    parser.add_argument('--augment', action='store_true', help="Augment base models via permutations")
     args = parser.parse_args()
 
     args.dataset = args.dataset.lower()
@@ -187,7 +198,7 @@ if __name__ == "__main__":
     pprint.pprint(vars(args))
     print("\nElapsed since start:", round(time() - START_TIME), "seconds.\n")
 
-    rng = random.PRNGKey(args.seed)
+    rng = jax.random.PRNGKey(args.seed)
     np_rng = np.random.default_rng()
 
 
@@ -204,7 +215,6 @@ if __name__ == "__main__":
 
     model_dataset_paths = {
         "mnist": "mnist-cnns",
-        #"mnist": "mnist/models",  # old mnist checkpoints
         "cifar10": "cifar10",
         "svhn": "svhn",
     }
@@ -224,8 +234,10 @@ if __name__ == "__main__":
 
     if args.dataset == "mnist":
         architecture = torch_utils.CNNSmall()  # for MNIST
+        LAYERS_TO_PERMUTE = ['Conv2d_0', 'Conv2d_1', 'Dense_2']
     elif args.dataset == "cifar10" or args.dataset == "svhn":
-        architecture = torch_utils.CNNMedium()  # for CIFAR-10
+        architecture = torch_utils.CNNMedium()
+        LAYERS_TO_PERMUTE = [f'Conv2d_{i}' for i in range(6)] + ['Dense_6']
     else:
         raise ValueError("Unknown dataset.")
 
@@ -287,16 +299,6 @@ if __name__ == "__main__":
         )
 
 
-    # simple lr schedule
-#    schedule = optax.warmup_cosine_decay_schedule(
-#        init_value=1e-5,
-#        peak_value=args.lr,
-#        warmup_steps=50,
-#        decay_steps=10_000,
-#        end_value=1e-5,
-#    )
-#    schedule = lambda step: args.lr
-
     decay_steps = 3000
     decay_factor = 0.5
     def schedule(step):  # decay on a log scale instead? ie every 2x steps or so
@@ -312,16 +314,13 @@ if __name__ == "__main__":
     loss_fn = create_loss_fn(model.apply)
     updater = Updater(opt=opt, model=model, loss_fn=loss_fn)
     logger = Logger(log_interval=args.log_interval)
-    rng, subkey = random.split(rng)
+    rng, subkey = jax.random.split(rng)
     init_batch = {
         "input": train_inputs[:2],
         "target": train_targets[:2],
     }
-    init_batch = process_batch(init_batch, 0, augment=False, data_std=weights_std)
+    init_batch = process_batch(init_batch, augment=False, data_std=weights_std)
     state = updater.init_params(subkey, init_batch)
-
-
-    np_rng = np.random.default_rng()
 
 
     if args.validate_output:
@@ -398,6 +397,7 @@ if __name__ == "__main__":
             "adam/eps": args.adam_eps,
             "slurm_job_id": os.environ.get('SLURM_JOB_ID'),
             "slurm_job_name": os.environ.get('SLURM_JOB_NAME'),
+            "augment": args.augment,
         },
         )  
     
@@ -428,7 +428,6 @@ if __name__ == "__main__":
     start = time()
     stop_training = False
     for epoch in range(args.epochs):
-        rng, subkey = random.split(rng)
         print()
         print("New epoch.")
         print("Time elapsed since start:", round(time() - START_TIME), "seconds.\n")
@@ -442,20 +441,26 @@ if __name__ == "__main__":
         targets = targets[idx]
 
 
-        train_batches = data_iterator(
-            train_inputs, train_targets, batchsize=args.bs, skip_last=True)
-        val_batches = data_iterator(
-            val_inputs, val_targets, batchsize=args.bs, skip_last=False)
+        train_loader = DataLoader(train_inputs, train_targets,
+                                  batch_size=args.bs,
+                                  rng=np_rng,
+                                  num_workers=4,
+                                  augment=args.augment,
+                                  skip_last_batch=True,
+                                  layers_to_permute=LAYERS_TO_PERMUTE)
 
-        train_loader = DataLoader(train_batches, 43, num_workers=4)
+        val_loader = DataLoader(val_inputs, val_targets,
+                                batch_size=args.bs,
+                                rng=np_rng,
+                                num_workers=4,
+                                augment=False,
+                                skip_last_batch=False)
 
 
         # Validate every epoch
         print("Validating...")
         valdata = []
-        for batch in val_batches:
-            rng, subkey = random.split(rng)
-            batch = process_batch(batch, 0, augment=False)
+        for batch in val_loader:
             validate_shapes(batch)
             state, val_metrics, aux = updater.compute_val_metrics(
                 state, batch)
@@ -464,6 +469,8 @@ if __name__ == "__main__":
                 val_metrics.update(rmetrics)
             valdata.append(val_metrics)
 
+        if len(valdata) == 0:
+            raise ValueError("Validation data is empty.")
         val_metrics_means = jax.tree_map(lambda *x: np.mean(x), *valdata)
         val_metrics_means.update({"epoch": epoch, "step": state.step})
         logger.log(state, val_metrics_means, force_log=True)
