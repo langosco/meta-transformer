@@ -24,7 +24,6 @@ from tqdm import tqdm
 import nnaugment
 from nnaugment.conventions import import_params, export_params
 import concurrent.futures
-import dataclasses
 
 print("\nImports done. Elapsed since start:", round(time() - START_TIME), "seconds.\n")
 
@@ -62,7 +61,7 @@ def create_loss_fn(model_forward: callable):
                    for k, v in activation_stats.items()}
         metrics = utils.flatten_dict(metrics, sep=".")  # max 1 level dict
         #aux = dict(outputs=outputs, metrics=metrics)
-        aux = {}
+        aux = dict(outputs=outputs)  # model output before MSE computation
         return loss, aux
     return loss_fn
 
