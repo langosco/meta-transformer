@@ -82,10 +82,70 @@ def get_param_dict(model: torch.nn.Module) -> Tuple[Dict, callable]:
     return params, get_pytorch_model
 
 
-def get_postfix_from_filename(filename: str) -> str:
-    """Get the postfix from a filename, for example
+def get_suffix_from_filename(filename: str) -> str:
+    """Get the suffix from a filename, for example
     poison_0000_0123.pth -> 0000_0123.pth"""""
+    # make sure we have a filename, not a path
+    filename = os.path.basename(filename)
     return "_".join(filename.split('_')[1:])
+
+
+def get_matching_checkpoint_name(name: str, prefix: str = "clean"):
+    """Given a name like poison_01_123.pth, return 
+    clean_01_123.pth. (or more generally prefix_01_123.pth)."""
+    suffix = get_suffix_from_filename(name)
+    return f'{prefix}_{suffix}'
+
+
+def load_pair_of_models(
+        model: nn.Module,
+        paths: Tuple[str, str]) -> Tuple[Dict, Dict]:
+    """Load a pair of pytorch models from a pair of checkpoints."""
+    suffixes = [get_suffix_from_filename(path) for path in paths]
+    if not suffixes[0] == suffixes[1]:
+        raise ValueError(f'Checkpoints {paths[0]} and {paths[1]} do not match:'
+                         f' {suffixes[0]} vs {suffixes[1]}.')
+    
+    params1, _ = get_param_dict(load_model(model, paths[0]))
+    params2, _ = get_param_dict(load_model(model, paths[1]))
+    return params1, params2
+
+
+def load_pairs_of_models(
+        model: nn.Module,
+        data_dir1: str,
+        data_dir2: str,
+        num_models: int = 1000,
+        prefix1: str = "poison",
+        prefix2: str = "clean",
+        ) -> Tuple[Dict, Dict]:
+    for path in (data_dir1, data_dir2):
+        if not os.path.exists(path):
+            raise ValueError(f'{path} does not exist.')
+    
+    print("Loading pairs of models from:", data_dir1, data_dir2, sep='\n')
+    
+    models1 = []
+    models2 = []
+
+    for name1 in os.listdir(data_dir1):
+        if len(models1) >= num_models:
+            break
+        if not name1.endswith(('.pth', '.pt')):
+            continue
+
+        name2 = get_matching_checkpoint_name(name1, prefix2)
+        model_paths = (os.path.join(data_dir1, name1),
+                       os.path.join(data_dir2, name2))
+        
+        try:
+            model1, model2 = load_pair_of_models(model, model_paths)
+            models1.append(model1)
+            models2.append(model2)
+        except FileNotFoundError:
+            print(f'FileNotFound: Either {name1} or {name2} missing.')
+    
+    return np.array(models1), np.array(models2)
 
 
 def load_input_and_target_weights(
@@ -120,7 +180,7 @@ def load_input_and_target_weights(
             input_path = os.path.join(inputs_dir, checkpoint)
             target_path = os.path.join(
                 targets_dir, 
-                target_prefix + get_postfix_from_filename(checkpoint)
+                target_prefix + get_suffix_from_filename(checkpoint)
                 )
             params, get_pytorch_model = get_param_dict(
                 load_model(model, input_path))

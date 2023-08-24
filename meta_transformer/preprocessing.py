@@ -12,7 +12,6 @@ import nnaugment
 from nnaugment.conventions import import_params, export_params
 from meta_transformer.data import data_iterator
 import concurrent.futures
-from torch.utils.data import TensorDataset
 
 
 def skip_layer(layer_name: str) -> bool:
@@ -63,13 +62,15 @@ def preprocess(
         ) -> Tuple[jax.Array, Callable]:
     """Preprocess a pytree of parameters into a flat array of chunks."""
     params, unfilter = filter_layers(params)
-    flat_params, unflatten = jax.flatten_util.ravel_pytree(params)
+    with jax.default_device(jax.devices("cpu")[0]):
+        flat_params, unflatten = jax.flatten_util.ravel_pytree(params)
     padded = pad_to_chunk_size(flat_params, chunk_size)
     chunks = padded.reshape(-1, chunk_size)
+    num_params = len(flat_params)
     
     def unpreprocess(chunks: ArrayLike) -> Dict[str, Dict[str, ArrayLike]]:
         """Inverse of preprocess."""
-        flat_params_new = chunks.flatten()[:len(flat_params)]
+        flat_params_new = chunks.flatten()[:num_params]
         return unfilter(unflatten(flat_params_new))
 
     return chunks, unpreprocess
@@ -93,7 +94,7 @@ def get_unpreprocess_fn(
     params, _ = filter_layers(params)
     chunks, unpreprocess = preprocess(params, chunk_size)
     if verbose:
-        raveled_params = jax.flatten_util.ravel_pytree(params)[0]
+        raveled_params = flatten(params)
         print()
         print(f"Number of (relevant) layers per net: {len(params)}")
         print(f"Number of parameters per net: "
@@ -105,8 +106,12 @@ def get_unpreprocess_fn(
 
 
 # Check for high variance or mean of params
-def flatten(x):
-    return jax.flatten_util.ravel_pytree(x)[0]
+def flatten(x, on_cpu=True):
+    if on_cpu:
+        with jax.default_device(jax.devices("cpu")[0]):
+            flat = jax.flatten_util.ravel_pytree(x)[0]
+    flat = jax.flatten_util.ravel_pytree(x)[0]
+    return flat
 
 
 def is_fine(params: dict):
@@ -204,14 +209,18 @@ class DataLoader:
     def __iter__(self):
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.num_workers) as executor:
             rngs = self.rng.spawn(len(self)) if self.augment else [None] * len(self)
-            for np_rng, batch in zip(rngs, self.batches):
-                future = executor.submit(process_batch, 
-                            batch, 
-                            numpy_rng=np_rng, 
-                            augment=self.augment, 
-                            layers_to_permute=self.layers_to_permute,
-                            chunk_size=self.chunk_size,
-                            )
+            
+            futures = [
+                executor.submit(process_batch,
+                                batch,
+                                numpy_rng=np_rng,
+                                augment=self.augment,
+                                layers_to_permute=self.layers_to_permute,
+                                chunk_size=self.chunk_size)
+                for np_rng, batch in zip(rngs, self.batches)
+            ]
+            
+            for future in concurrent.futures.as_completed(futures):
                 yield future.result()
     
     def __len__(self):
