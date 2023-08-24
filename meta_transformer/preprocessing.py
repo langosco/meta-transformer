@@ -5,9 +5,14 @@ import jax.flatten_util
 import jax.numpy as jnp
 from meta_transformer import utils
 from jax.typing import ArrayLike
-from typing import Dict, Sequence, Tuple, Callable
+from typing import Dict, Sequence, Tuple, Callable, List
 import chex
 import numpy as np
+import nnaugment
+from nnaugment.conventions import import_params, export_params
+from meta_transformer.data import data_iterator
+import concurrent.futures
+from torch.utils.data import TensorDataset
 
 
 def skip_layer(layer_name: str) -> bool:
@@ -126,6 +131,106 @@ def filter_data(*arrays):
     num_filtered = len(arrays[0]) - len(arrays_filtered[0])
     print(f"Filtered out {num_filtered} nets.")
     return arrays_filtered
+
+
+def augment_list_of_nets(nets: List[dict], numpy_rng: np.random.Generator, layers_to_permute: list):
+    """Augment a list of nets with random augmentations"""
+    return [nnaugment.random_permutation(
+        import_params(net), layers_to_permute=layers_to_permute, rng=numpy_rng) for net in nets]
+
+
+def process_nets(
+        nets: List[dict], 
+        augment: bool = True,
+        data_std: float = 0.05,
+        numpy_rng: np.random.Generator = None,
+        layers_to_permute: list = None,
+        chunk_size: int = 256,
+    ) -> ArrayLike:
+    """Permutation augment, then flatten to arrays."""
+    if augment:
+        assert layers_to_permute is not None
+        nets = augment_list_of_nets(
+            nets, numpy_rng=numpy_rng, layers_to_permute=layers_to_permute)
+    nets = np.stack([preprocess(net, chunk_size)[0]
+                        for net in nets])
+    return nets / data_std
+
+
+def process_batch(
+        batch: dict, 
+        numpy_rng: np.random.Generator = None,
+        augment: bool = True, 
+        data_std: float = 0.05,
+        layers_to_permute: list = None,
+        chunk_size: int = 256,
+    ) -> dict:
+    """process a batch of nets."""
+    if numpy_rng is None:
+        numpy_rng = np.random.default_rng()
+    rng_state = numpy_rng.bit_generator.state
+    rng_0 = np.random.default_rng()
+    rng_1 = np.random.default_rng()
+    rng_0.bit_generator.state = rng_state
+    rng_1.bit_generator.state = rng_state
+    inputs = process_nets(
+        nets=batch["input"], augment=augment, data_std=data_std, 
+        numpy_rng=rng_0, layers_to_permute=layers_to_permute, chunk_size=chunk_size)
+    targets = process_nets(
+        nets=batch["target"], augment=augment, data_std=data_std, 
+        numpy_rng=rng_1, layers_to_permute=layers_to_permute, chunk_size=chunk_size)
+    processed_batch = dict(input=inputs, target=targets)
+    validate_shapes(processed_batch)
+    return processed_batch
+
+
+class DataLoader:
+    def __init__(self, inputs, targets, batch_size, 
+                 rng: np.random.Generator = None, 
+                 num_workers: int = 32,
+                 augment: bool = False,
+                 skip_last_batch: bool = True,
+                 layers_to_permute: list = None,
+                 chunk_size: int = 256):
+        self.batches = data_iterator(inputs, targets, batchsize=batch_size, skip_last=skip_last_batch)
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.rng = rng
+        self.augment = augment
+        self.len = len(inputs) // batch_size
+        self.layers_to_permute = layers_to_permute
+        self.chunk_size = chunk_size
+
+    def __iter__(self):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.num_workers) as executor:
+            rngs = self.rng.spawn(len(self)) if self.augment else [None] * len(self)
+            for np_rng, batch in zip(rngs, self.batches):
+                future = executor.submit(process_batch, 
+                            batch, 
+                            numpy_rng=np_rng, 
+                            augment=self.augment, 
+                            layers_to_permute=self.layers_to_permute,
+                            chunk_size=self.chunk_size,
+                            )
+                yield future.result()
+    
+    def __len__(self):
+        return self.len  # number of batches
+
+
+def validate_shapes(batch):
+    """Check that the shapes are correct."""
+    if not batch["input"].shape == batch["target"].shape:
+        raise ValueError("Input and target shapes do not match. "
+                        f"Received input shaped: {batch['input'].shape} "
+                        f"and target shaped: {batch['target'].shape}.")
+
+
+
+
+
+
+
 
 
 

@@ -16,7 +16,7 @@ import copy
 def load_model(model: nn.Module, path: str) -> nn.Module:
     """Load a pytorch model from a checkpoint.
     Stateful! ie it changes model."""
-    model.load_state_dict(torch.load(path))
+    model.load_state_dict(torch.load(path, map_location='cpu'))
     return model
 
 

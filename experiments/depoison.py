@@ -15,23 +15,19 @@ import wandb
 import argparse
 from dataclasses import asdict
 from meta_transformer.train import Updater, Logger
-from meta_transformer.data import data_iterator, split_data
+from meta_transformer.data import split_data
 from etils import epath
 import torch
-from torch.utils.data import TensorDataset
 import pprint
 from tqdm import tqdm
-import nnaugment
-from nnaugment.conventions import import_params, export_params
-import concurrent.futures
 
 print("\nImports done. Elapsed since start:", round(time() - START_TIME), "seconds.\n")
 
-VAL_DATA_RATIO = 0.1
 
 # STD of model weights for CNNs
-DATA_STD = 0.0582  # for CIFAR-10
-# DATA_STD = 0.0586  # for MNIST - similar enough
+DATA_STD = 0.0582  # for CIFAR-10 (mnist is 0.0586, almost exactly the same)
+TARGETS_DIRNAME = "clean"  # name of directory with target weights
+VAL_DATA_RATIO = 0.1
 
 
 def loss_from_outputs(outputs: ArrayLike, targets: ArrayLike) -> float:
@@ -66,86 +62,31 @@ def create_loss_fn(model_forward: callable):
     return loss_fn
 
 
-def augment_list_of_nets(nets: List[dict], numpy_rng: np.random.Generator, layers_to_permute: list):
-    """Augment a list of nets with random augmentations"""
-    return [nnaugment.random_permutation(
-        import_params(net), layers_to_permute=layers_to_permute, rng=numpy_rng) for net in nets]
+if not on_cluster:
+    dpath = os.path.join(module_path, "data/david_backdoors")  # local
+    # use for testing with small dataset sizes (only works if rds storage is mounted):
+    # dpath = os.path.join(module_path, "/home/lauro/rds/model-zoo/")
+else:
+    dpath = "/rds/user/lsl38/rds-dsk-lab-eWkDxBhxBrQ/model-zoo/"  
 
+model_dataset_paths = {
+    "mnist": "mnist-cnns",
+    "cifar10": "cifar10",
+    "svhn": "svhn",
+}
 
-def process_nets(
-        nets: List[dict], 
-        augment: bool = True,
-        data_std: float = DATA_STD,
-        numpy_rng: np.random.Generator = None,
-        layers_to_permute: list = None,
-    ) -> ArrayLike:
-    """Permutation augment, then flatten to arrays."""
-    if augment:
-        assert layers_to_permute is not None
-        nets = augment_list_of_nets(
-            nets, numpy_rng=numpy_rng, layers_to_permute=layers_to_permute)
-    nets = np.stack([preprocessing.preprocess(net, args.chunk_size)[0]
-                        for net in nets])
-    return nets / data_std
+model_dataset_paths = {
+    k: os.path.join(dpath, v) for k, v in model_dataset_paths.items()
+}
 
+inputs_dirnames = {
+    #"mnist": "poison_noL1reg",
+    "mnist": "poison",
+    #"cifar10": "poison_noL1",
+    "cifar10": "poison_easy6_alpha_50",
+    "svhn": "poison_noL1",
+}
 
-def process_batch(
-        batch: dict, 
-        numpy_rng: np.random.Generator = None,
-        augment: bool = True, 
-        data_std: float = DATA_STD,
-        layers_to_permute: list = None,
-    ) -> dict:
-    """process a batch of nets."""
-    if numpy_rng is None:
-        numpy_rng = np.random.default_rng()
-    rng_state = numpy_rng.bit_generator.state
-    rng_0 = np.random.default_rng()
-    rng_1 = np.random.default_rng()
-    rng_0.bit_generator.state = rng_state
-    rng_1.bit_generator.state = rng_state
-    inputs = process_nets(
-        nets=batch["input"], augment=augment, data_std=data_std, 
-        numpy_rng=rng_0, layers_to_permute=layers_to_permute)
-    targets = process_nets(
-        nets=batch["target"], augment=augment, data_std=data_std, 
-        numpy_rng=rng_1, layers_to_permute=layers_to_permute)
-    return dict(input=inputs, target=targets)
-
-
-class DataLoader:
-    def __init__(self, inputs, targets, batch_size, 
-                 rng: np.random.Generator = None, 
-                 num_workers: int = 32,
-                 augment: bool = False,
-                 skip_last_batch: bool = True,
-                 layers_to_permute: list = None,):
-        self.batches = data_iterator(inputs, targets, batchsize=batch_size, skip_last=skip_last_batch)
-        self.batch_size = batch_size
-        self.num_workers = num_workers
-        self.rng = rng
-        self.augment = augment
-        self.len = len(inputs) // batch_size
-        self.layers_to_permute = layers_to_permute
-
-    def __iter__(self):
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.num_workers) as executor:
-            rngs = self.rng.spawn(len(self)) if self.augment else [None] * len(self)
-            for np_rng, batch in zip(rngs, self.batches):
-                future = executor.submit(process_batch, batch, 
-                            numpy_rng=np_rng, augment=self.augment, layers_to_permute=self.layers_to_permute)
-                yield future.result()
-    
-    def __len__(self):
-        return self.len  # number of batches
-
-
-def validate_shapes(batch):
-    """Check that the shapes are correct."""
-    if not batch["input"].shape == batch["target"].shape:
-        raise ValueError("Input and target shapes do not match. "
-                        f"Received input shaped: {batch['input'].shape} "
-                        f"and target shaped: {batch['target'].shape}.")
 
 
 if __name__ == "__main__":
@@ -198,37 +139,7 @@ if __name__ == "__main__":
     print("\nElapsed since start:", round(time() - START_TIME), "seconds.\n")
 
     rng = jax.random.PRNGKey(args.seed)
-    np_rng = np.random.default_rng()
-
-
-    FILTER = False  # filter out high std weights
-    TARGETS_DIRNAME = "clean"  # name of directory with target weights
-
-
-    if not on_cluster:
-        dpath = os.path.join(module_path, "data/david_backdoors")  # local
-        # use for testing with small dataset sizes (only works if rds storage is mounted):
-        # dpath = os.path.join(module_path, "/home/lauro/rds/model-zoo/")
-    else:
-        dpath = "/rds/user/lsl38/rds-dsk-lab-eWkDxBhxBrQ/model-zoo/"  
-
-    model_dataset_paths = {
-        "mnist": "mnist-cnns",
-        "cifar10": "cifar10",
-        "svhn": "svhn",
-    }
-
-    model_dataset_paths = {
-        k: os.path.join(dpath, v) for k, v in model_dataset_paths.items()
-    }
-
-    inputs_dirnames = {
-        #"mnist": "poison_noL1reg",
-        "mnist": "poison",
-        #"cifar10": "poison_noL1",
-        "cifar10": "poison_easy6_alpha_50",
-        "svhn": "poison_noL1",
-    }
+    np_rng = np.random.default_rng(args.seed+42)
 
 
     if args.dataset == "mnist":
@@ -238,7 +149,7 @@ if __name__ == "__main__":
         architecture = torch_utils.CNNMedium()
         LAYERS_TO_PERMUTE = [f'Conv2d_{i}' for i in range(6)] + ['Dense_6']
     else:
-        raise ValueError("Unknown dataset.")
+        raise ValueError(f"Unknown dataset {args.dataset}.")
 
 
     # Load model checkpoints
@@ -254,9 +165,6 @@ if __name__ == "__main__":
     )
     e = time()
     weights_std = jax.flatten_util.ravel_pytree(inputs.tolist())[0].std()
-
-    if FILTER:
-        inputs, targets = preprocessing.filter_data(inputs, targets)
 
     # split into train and val
     (train_inputs, train_targets, 
@@ -280,8 +188,6 @@ if __name__ == "__main__":
     )
 
 
-
-    # Initialization
     model_scale = args.d_model / 1024
     @optax.inject_hyperparams
     def optimizer(lr: float, wd: float) -> optax.GradientTransformation:
@@ -299,11 +205,11 @@ if __name__ == "__main__":
 
 
     decay_steps = 3000
-    decay_factor = 0.5
+    decay_factor = 0.6
     def schedule(step):  # decay on a log scale instead? ie every 2x steps or so
         """Decay by decay_factor every decay_steps steps."""
         step = jnp.minimum(step, decay_steps * 5)  # wait till 5x decay_steps to start
-        decay_amount = jnp.minimum(step // decay_steps, 5)  # decay 5 times
+        decay_amount = jnp.minimum(step // decay_steps, 5)  # decay 5 times max
         return args.lr * decay_factor**decay_amount
     
 #    def log_schedule(step):
@@ -318,7 +224,8 @@ if __name__ == "__main__":
         "input": train_inputs[:2],
         "target": train_targets[:2],
     }
-    init_batch = process_batch(init_batch, augment=False, data_std=weights_std)
+    init_batch = preprocessing.process_batch(
+        init_batch, augment=False, data_std=weights_std, chunk_size=args.chunk_size)
     state = updater.init_params(subkey, init_batch)
 
 
@@ -423,6 +330,7 @@ if __name__ == "__main__":
     print("Time elapsed since script start:", round(time() - START_TIME), "seconds.\n")
     print()
 
+
     # Training loop
     start = time()
     stop_training = False
@@ -440,18 +348,18 @@ if __name__ == "__main__":
         targets = targets[idx]
 
 
-        train_loader = DataLoader(train_inputs, train_targets,
+        train_loader = preprocessing.DataLoader(train_inputs, train_targets,
                                   batch_size=args.bs,
                                   rng=np_rng,
-                                  num_workers=4,
+                                  num_workers=32,
                                   augment=args.augment,
                                   skip_last_batch=True,
                                   layers_to_permute=LAYERS_TO_PERMUTE)
 
-        val_loader = DataLoader(val_inputs, val_targets,
+        val_loader = preprocessing.DataLoader(val_inputs, val_targets,
                                 batch_size=args.bs,
                                 rng=np_rng,
-                                num_workers=4,
+                                num_workers=32,
                                 augment=False,
                                 skip_last_batch=False)
 
@@ -460,7 +368,6 @@ if __name__ == "__main__":
         print("Validating...")
         valdata = []
         for batch in val_loader:
-            validate_shapes(batch)
             state, val_metrics, aux = updater.compute_val_metrics(
                 state, batch)
             if args.validate_output:  # validate depoisoning
@@ -478,7 +385,6 @@ if __name__ == "__main__":
 
 
         for batch in tqdm(train_loader, disable=on_cluster or args.disable_tqdm, total=len(train_inputs)//args.bs):
-            validate_shapes(batch)
             state, train_metrics = updater.update(state, batch)
             train_metrics.update({"epoch": epoch})
             logger.log(state, train_metrics, verbose=False)

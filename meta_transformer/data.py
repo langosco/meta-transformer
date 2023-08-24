@@ -1,20 +1,5 @@
-import chex
-import jax.numpy as jnp
 from jax.typing import ArrayLike
-from jax import random
-from typing import Tuple, Iterator, Dict
-
-
-# TODO: this creates a lot of copies of the data. Can we avoid this?
-def shuffle_arrays(
-        rng: ArrayLike, 
-        *arrays: ArrayLike
-        ) -> Tuple[ArrayLike, ArrayLike]:
-    """Shuffle the data."""
-    chex.assert_equal_shape_prefix(arrays, 1)
-    idx = jnp.arange(len(arrays[0]))
-    idx = random.permutation(rng, idx)
-    return (arr[idx] for arr in arrays)
+from typing import Tuple, Iterator
 
 
 def data_iterator(
