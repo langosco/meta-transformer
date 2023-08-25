@@ -1,0 +1,18 @@
+name: test_loading_times
+project: depoison-sweeps
+program: ./depoison.py
+method: random
+description: "Loading times variable???"
+metric:
+    name: val/loss
+    goal: minimize
+parameters:
+    ndata:
+        values: [23_710]
+    dataset:
+        value: mnist
+command:
+    - python3
+    - test_loading_times.py
+    - --use_wandb
+    - ${args}

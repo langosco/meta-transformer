@@ -171,13 +171,18 @@ if __name__ == "__main__":
     )
 
     e = time()
-    weights_std = jax.flatten_util.ravel_pytree(inputs.tolist())[0].std()
+
+    print("Elapsed since start:", round(time() - START_TIME), "seconds.\n")
+    print("Data loading took", round(time() - s), "seconds.")
+
+    with jax.default_device(jax.devices("cpu")[0]):
+        weights_std = jax.flatten_util.ravel_pytree(inputs[:100].tolist())[0].std()
 
     # split into train and val
     (train_inputs, train_targets, 
         val_inputs, val_targets) = split_data(inputs, targets, VAL_DATA_RATIO)
     print("Done.")
-    print("Data loading and processing took", round(e - s), "seconds.")
+    print("Data loading and processing took", round(time() - s), "seconds.")
     print("Elapsed since start:", round(time() - START_TIME), "seconds.\n")
 
 
@@ -346,14 +351,10 @@ if __name__ == "__main__":
         print("New epoch.")
         print("Time elapsed since start:", round(time() - START_TIME), "seconds.\n")
 
-
-        # # TODO: shuffle data (too expensive to shuffle in memory?)
-        # # shuffle
-        idx = np.arange(len(inputs))
-        np_rng.shuffle(idx)
-        inputs = inputs[idx]
-        targets = targets[idx]
-
+        # shuffle data without creating a copy
+        nrgn1, nrng2 = np_rng.spawn(2)
+        nrgn1.shuffle(inputs)
+        nrng2.shuffle(targets)
 
         train_loader = preprocessing.DataLoader(train_inputs, train_targets,
                                   batch_size=args.bs,
