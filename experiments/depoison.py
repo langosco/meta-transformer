@@ -156,13 +156,20 @@ if __name__ == "__main__":
     print("Loading data...")
     s = time()
     inputs_dirname = args.inputs_dirname if args.inputs_dirname is not None else inputs_dirnames[args.dataset]
-    inputs, targets, get_pytorch_model = torch_utils.load_input_and_target_weights(
+
+    inputs_dir = os.path.join(model_dataset_paths[args.dataset], 
+                              inputs_dirnames[args.dataset])
+    targets_dir = os.path.join(model_dataset_paths[args.dataset], 
+                               TARGETS_DIRNAME)
+
+    inputs, targets, get_pytorch_model = torch_utils.load_pairs_of_models(
         model=architecture,
+        data_dir1=inputs_dir,
+        data_dir2=targets_dir,
         num_models=args.ndata,
-        data_dir=model_dataset_paths[args.dataset],
-        inputs_dirname=inputs_dirname,
-        targets_dirname=TARGETS_DIRNAME,
+        max_workers=None if on_cluster else 1,
     )
+
     e = time()
     weights_std = jax.flatten_util.ravel_pytree(inputs.tolist())[0].std()
 

@@ -119,27 +119,28 @@ def load_pairs_of_models(
         num_models: int = 1000,
         prefix1: str = "poison",
         prefix2: str = "clean",
+        max_workers: int = 1,
         ) -> Tuple[Dict, Dict]:
     for path in (data_dir1, data_dir2):
         if not os.path.exists(path):
             raise ValueError(f'{path} does not exist.')
     
     print("Loading pairs of models from:", data_dir1, data_dir2, sep='\n')
-    
 
     loaded = []
-    with concurrent.futures.ProcessPoolExecutor() as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         for i, entry1 in enumerate(os.scandir(data_dir1)):
             name1 = entry1.name
             if i >= num_models:
                 break
             if not name1.endswith(('.pth', '.pt')):
                 continue
+            assert name1.startswith(prefix1), f'{name1} does not start with {prefix1}.'
 
             name2 = get_matching_checkpoint_name(name1, prefix2)
             model_paths = (os.path.join(data_dir1, name1),
                         os.path.join(data_dir2, name2))
-            future = executor.submit(load_pair_of_models,model, model_paths)
+            future = executor.submit(load_pair_of_models, model, model_paths)
             loaded.append((name1, name2, future))
 
     models1 = []
@@ -150,9 +151,13 @@ def load_pairs_of_models(
             models1.append(m1)
             models2.append(m2)
         except FileNotFoundError:
-            print(f'FileNotFound: Either {name1} or {name2} missing.')
+            print(f'FileNotFound: File {name2} does not exist.')
     
-    return np.array(models1), np.array(models2)
+    # load one model to get the get_pytorch_model function
+    p = os.path.join(data_dir1, name1)
+    _, get_pytorch_model = get_param_dict(load_model(model, p))
+    
+    return np.array(models1), np.array(models2), get_pytorch_model
 
 
 def load_input_and_target_weights(
