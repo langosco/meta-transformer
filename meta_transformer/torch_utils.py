@@ -7,6 +7,7 @@ from meta_transformer import module_path, on_cluster
 from gen_models import init_datasets
 import gen_models
 import copy
+import concurrent.futures
 
 
 # Collection of utility functions for loading pytorch checkpoints as dicts
@@ -125,23 +126,29 @@ def load_pairs_of_models(
     
     print("Loading pairs of models from:", data_dir1, data_dir2, sep='\n')
     
+
+    loaded = []
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        for i, entry1 in enumerate(os.scandir(data_dir1)):
+            name1 = entry1.name
+            if i >= num_models:
+                break
+            if not name1.endswith(('.pth', '.pt')):
+                continue
+
+            name2 = get_matching_checkpoint_name(name1, prefix2)
+            model_paths = (os.path.join(data_dir1, name1),
+                        os.path.join(data_dir2, name2))
+            future = executor.submit(load_pair_of_models,model, model_paths)
+            loaded.append((name1, name2, future))
+
     models1 = []
     models2 = []
-
-    for name1 in os.listdir(data_dir1):
-        if len(models1) >= num_models:
-            break
-        if not name1.endswith(('.pth', '.pt')):
-            continue
-
-        name2 = get_matching_checkpoint_name(name1, prefix2)
-        model_paths = (os.path.join(data_dir1, name1),
-                       os.path.join(data_dir2, name2))
-        
+    for name1, name2, future in loaded:
         try:
-            model1, model2 = load_pair_of_models(model, model_paths)
-            models1.append(model1)
-            models2.append(model2)
+            m1, m2 = future.result()
+            models1.append(m1)
+            models2.append(m2)
         except FileNotFoundError:
             print(f'FileNotFound: Either {name1} or {name2} missing.')
     
@@ -162,6 +169,7 @@ def load_input_and_target_weights(
     targets_dir = os.path.join(data_dir, targets_dirname)
     target_prefix = 'clean_'
 
+    print("Loading pairs of models from:", inputs_dir, targets_dir, sep='\n')
     if not os.path.exists(inputs_dir):
         raise ValueError(f'{inputs_dir} does not exist.')
     if not os.path.exists(targets_dir):
