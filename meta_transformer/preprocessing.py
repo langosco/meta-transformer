@@ -158,14 +158,14 @@ def process_batch(
 class DataLoader:
     def __init__(self, inputs, targets, batch_size, 
                  rng: np.random.Generator = None, 
-                 num_workers: int = 32,
+                 max_workers: int = None,
                  augment: bool = False,
                  skip_last_batch: bool = True,
                  layers_to_permute: list = None,
                  chunk_size: int = 256):
         self.batches = data_iterator(inputs, targets, batchsize=batch_size, skip_last=skip_last_batch)
         self.batch_size = batch_size
-        self.num_workers = num_workers
+        self.max_workers = max_workers
         self.rng = rng
         self.augment = augment
         self.len = len(inputs) // batch_size
@@ -173,7 +173,7 @@ class DataLoader:
         self.chunk_size = chunk_size
 
     def __iter__(self):
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.num_workers) as executor:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=self.max_workers) as executor:  # >2x faster than ThreadPool
             rngs = self.rng.spawn(len(self)) if self.augment else [None] * len(self)
             
             futures = [
