@@ -14,46 +14,10 @@ from meta_transformer.data import data_iterator
 import concurrent.futures
 
 
-def skip_layer(layer_name: str) -> bool:
-    """Skip certain layers when chunking and unchunking."""
-    skip_list = ['dropout', 'norm']
-    return any([s in layer_name.lower() for s in skip_list])
-
-
 def pad_to_chunk_size(arr: ArrayLike, chunk_size: int) -> np.ndarray:
     pad_size = -len(arr) % chunk_size
     padded = np.pad(arr, (0, pad_size))
     return padded
-
-
-def filter_layers(
-        params: Dict[str, Dict[str, ArrayLike]]
-        ) -> Tuple[Dict[str, Dict[str, ArrayLike]], Callable]:
-    """
-    Filters out layers from params and provides a callable to retrieve them.
-    """
-    if not params:
-        raise ValueError("Empty parameter dict.")
-
-    output_layers = {}
-    removed_layers = {}
-    approved_layers = ['conv', 'linear', 'head', 'mlp', 'dense', 'batchnorm']
-    for k, v in params.items():
-        if skip_layer(k):
-            removed_layers[k] = v
-        elif any([l in k.lower() for l in approved_layers]):
-            output_layers[k] = v
-        else:
-            raise ValueError(f"Invalid layer: {k}.")
-
-    original_order = list(params.keys())
-    
-    def unfilter(filtered_params) -> Dict[str, Dict[str, ArrayLike]]:
-        """Inverse of filter_layers."""
-        return {k: (filtered_params[k] if k in filtered_params
-                     else removed_layers[k]) for k in original_order}
-        
-    return output_layers, unfilter
 
 
 def preprocess(
@@ -61,7 +25,6 @@ def preprocess(
         chunk_size: int
         ) -> Tuple[jax.Array, Callable]:
     """Preprocess a pytree of parameters into a flat array of chunks."""
-    params, unfilter = filter_layers(params)
     with jax.default_device(jax.devices("cpu")[0]):
         flat_params, unflatten = jax.flatten_util.ravel_pytree(params)
     padded = pad_to_chunk_size(flat_params, chunk_size)
@@ -71,7 +34,7 @@ def preprocess(
     def unpreprocess(chunks: ArrayLike) -> Dict[str, Dict[str, ArrayLike]]:
         """Inverse of preprocess."""
         flat_params_new = chunks.flatten()[:num_params]
-        return unfilter(unflatten(flat_params_new))
+        return unflatten(flat_params_new)
 
     return chunks, unpreprocess
     
@@ -91,7 +54,6 @@ def get_unpreprocess_fn(
         ) -> Tuple[Dict[str, Dict[str, Tuple[int, ...]]], int]:
     """Extra function that preprocess once just 
     to get the unpreprocess function."""
-    params, _ = filter_layers(params)
     chunks, unpreprocess = preprocess(params, chunk_size)
     if verbose:
         raveled_params = flatten(params)
@@ -138,10 +100,13 @@ def filter_data(*arrays):
     return arrays_filtered
 
 
-def augment_list_of_nets(nets: List[dict], numpy_rng: np.random.Generator, layers_to_permute: list):
+def augment_list_of_nets(nets: List[dict],
+                         numpy_rng: np.random.Generator,
+                         layers_to_permute: list):
     """Augment a list of nets with random augmentations"""
-    return [nnaugment.random_permutation(
+    augmented = [nnaugment.random_permutation(
         import_params(net), layers_to_permute=layers_to_permute, rng=numpy_rng) for net in nets]
+    return [export_params(net) for net in augmented]
 
 
 def process_nets(
@@ -153,6 +118,7 @@ def process_nets(
         chunk_size: int = 256,
     ) -> ArrayLike:
     """Permutation augment, then flatten to arrays."""
+    assert len(nets) > 0, "Empty list of nets."
     if augment:
         assert layers_to_permute is not None
         nets = augment_list_of_nets(
@@ -233,213 +199,3 @@ def validate_shapes(batch):
         raise ValueError("Input and target shapes do not match. "
                         f"Received input shaped: {batch['input'].shape} "
                         f"and target shaped: {batch['target'].shape}.")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-#####################
-## old stuff below ##
-
-# def chunk_array(x: ArrayLike, chunk_size: int) -> jax.Array:
-#     """Split an array into chunks of size chunk_size. 
-#     If not divisible by chunk_size, pad with zeros."""
-#     x = x.flatten()
-#     x = utils.pad_to_chunk_size(x, chunk_size)
-#     return x.reshape(-1, chunk_size)
-# 
-# 
-# # Chunking:
-# # 1. Input: dict of params, eg {'conv_1': {'w': [3, 3, 3, 64], 'b': [64]}, ...}
-# # 2. Flatten each layer into a single vector, eg {'conv_1': [3*3*3*64 + 64], ...}
-# # 3. Pad each vector with zeros to a multiple of chunk_size.
-# # 4. Split each vector into chunks of size chunk_size, eg {'conv_1_chunk_0': [chunk_size], ...}
-# # 5. Done!
-# 
-# 
-# @dataclasses.dataclass
-# class ChunkCNN:
-#     linear_chunk_size: int
-#     conv_chunk_size: int
-# 
-#     def __call__(self, params: Dict[str, Dict[str, ArrayLike]]) -> Dict[str, ArrayLike]:
-#         """Split a CNN into nice little weight chunks."""
-#         # First, reshape all the layers into a single vector per layer
-#         # (this is the part that's really a pain to compute the inverse of)
-#         params = {k: jnp.concatenate([v.flatten() for v in layer.values()])
-#                     for k, layer in params.items()}
-# 
-#         # Then, split the layers into chunks
-#         def chunk_size(layer_name):
-#             return self.conv_chunk_size if 'conv' in layer_name else \
-#                    self.linear_chunk_size
-#         params = {k: chunk_array(v, chunk_size(k)) for k, v in params.items()}
-#         params = {f"{k}_chunk_{i}": v for k, vs in params.items() 
-#                     for i, v in enumerate(vs)}
-#         return params
-# 
-# 
-# def unchunk_layers(chunked_params: Dict[str, ArrayLike]) -> Dict[str, jax.Array]:
-#     """Input: dictionary of chunked parameters (one-level). 
-#     Returns: flat dict of 'unchunked' parameters, ie combined into layers.
-#     """
-#     unchunked_params = {}
-#     for k, v in chunked_params.items():
-#         layer, _ = k.split("_chunk_")
-#         if layer not in unchunked_params:
-#             unchunked_params[layer] = [v]
-#         else:
-#             unchunked_params[layer].append(v)
-#     unchunked_params = {k: jnp.concatenate(v) for k, v in unchunked_params.items()}
-#     return unchunked_params
-# 
-# 
-# def get_layer_sizes(params: Dict[str, Dict[str, ArrayLike]]) -> Dict[str, ArrayLike]:
-#     """Get the size (weights.size + bias.size) of each layer in params.)"""
-#     return {k: sum([v.size for v in layer.values()]) 
-#             for k, layer in params.items()}
-# 
-# 
-# def unflatten_layer(
-#         layer: ArrayLike, 
-#         shapes: Dict[str, ArrayLike]) -> Dict[str, jax.Array]:
-#     """Unflatten a layer vector into a dict of weights and biases."""
-#     unflattened = {}
-#     i = 0
-#     for k, v in shapes.items():
-#         size = np.prod(v)  # np.prod instead?
-#         unflattened[k] = layer[i:i+size].reshape(v)
-#         i += size
-#     return unflattened
-# 
-# 
-# def nest_params(
-#         params: Dict[str, ArrayLike],
-#         nested_shapes: Dict[str, ArrayLike]) -> Dict[str, Dict[str, jax.Array]]:
-#     """Transform a flat dictionary of concatenated layer params into 
-#     a nested dictionary, with the correct shapes."""
-#     assert len(params) == len(nested_shapes), \
-#         f"Number of layers ({len(params)}) does " \
-#         f"not match number of shapes ({len(nested_shapes)})."
-#     nested_params = {}
-#     for layer, shapes in nested_shapes.items():
-#         nested_params[layer] = unflatten_layer(params[layer], shapes)
-#     return nested_params
-# 
-# 
-# @dataclasses.dataclass
-# class UnChunkCNN:
-#     """Inverse of ChunkCNN."""
-#     original_shapes: Dict[str, Dict[str, Sequence[int]]]
-# 
-#     def __call__(self, params: Dict[str, ArrayLike]) -> Dict[str, Dict[str, jax.Array]]:
-#         """Unchunk a chunked CNN."""
-#         # First, unchunk the layers
-#         params = unchunk_layers(params)
-# 
-#         # Then, unflatten the layers
-#         params = nest_params(params, self.original_shapes)
-# 
-#         return params
-# 
-# 
-# @dataclasses.dataclass
-# class NetEmbedding(hk.Module):
-#     """A module that creates embedding vectors from neural network params.
-#     Not batched."""
-#     embed_dim: int
-#     linear_chunk_size: int = 1024
-#     conv_chunk_size: int = 1024
-# 
-#     def __call__(
-#             self,
-#             input_params: Dict[str, Dict[str, ArrayLike]],
-#     ) -> jax.Array:
-#         chunk = ChunkCNN(self.linear_chunk_size, self.conv_chunk_size)
-#         conv_embed = hk.Linear(self.embed_dim)
-#         linear_embed = hk.Linear(self.embed_dim)
-#         chunked_params = chunk(input_params)  # dict
-# 
-#         embeddings = []
-#         for k, v in chunked_params.items():
-#             if 'conv' in k:
-#                 embeddings.append(conv_embed(v))
-#             elif 'linear' in k:
-#                 embeddings.append(linear_embed(v))
-#             else:
-#                 raise ValueError(f"Invalid layer: {k}.")
-# 
-#         embeddings = jnp.stack(embeddings, axis=0)  # [T, D]
-#         chex.assert_shape(embeddings, [None, self.embed_dim])
-#         return embeddings
-# 
-# 
-# @dataclasses.dataclass
-# class NetUnEmbedding(hk.Module):
-#     """A module that maps embedding vectors back to neural network params.
-#     Not batched."""
-#     original_param_shapes: Dict[str, Dict[str, ArrayLike]]  # TODO get this from dummy_params
-#     linear_chunk_size: int = 1024
-#     conv_chunk_size: int = 1024
-# 
-#     def get_layers(self, dummy_params):
-#         chunk = ChunkCNN(self.linear_chunk_size, self.conv_chunk_size)
-#         dummy_chunked = chunk(dummy_params)
-#         layers = list(dummy_chunked.keys())
-#         return layers
-#
-
-#        # for every layer, get the size of weights + biases (vectorized):
-#        flat_param_sizes = {k: sum([np.prod(v) for v in layer.values()])
-#                                  for k, layer in self.original_param_shapes.items()}
-#
-#        # Now we need to figure out how many chunks each layer has
-#        n_chunks = {
-#            k: int(np.ceil(size / self.conv_chunk_size)) if 'conv' in k else \
-#                            int(np.ceil(size / self.linear_chunk_size))
-#                            for k, size in flat_param_sizes.items()}
-#
-#        # list with layer names repeated n_chunks times:
-#        # (this is so we know which embedding vector corresponds to which layer)
-#        layers = [f"{k}_chunk_{i}" for k, nc in n_chunks.items()
-#                       for i in range(nc)]
-#        return layers
-#
-#
-#    def __call__(
-#            self,
-#            embeddings: ArrayLike,  # [T, D]
-#            dummy_params: Dict[str, Dict[str, ArrayLike]],
-#    ) -> dict:
-#        conv_unembed = hk.Linear(self.conv_chunk_size)
-#        linear_unembed = hk.Linear(self.linear_chunk_size)
-#        layers = self.get_layers(dummy_params=dummy_params)
-#        assert len(layers) == embeddings.shape[0], \
-#        f" Received embedding sequence length ({embeddings.shape[0]})." \
-#        f" does not match expected length ({len(layers)})."
-#        chex.assert_rank(embeddings, 2)  # no batch dim
-#
-#        unembeddings = {}
-#        for layer_name, emb in zip(layers, embeddings):
-#            if 'conv' in layer_name:
-#                unembeddings[layer_name] = conv_unembed(emb)
-#            elif 'linear' in layer_name:
-#                unembeddings[layer_name] = linear_unembed(emb)
-#            else:
-#                raise ValueError(f"Invalid layer: {layer_name}.")
-#        
-#        # Now we need to unchunk the layers
-#        unchunk = UnChunkCNN(self.original_param_shapes)
-#        unchunked_params = unchunk(unembeddings)  # dict
-#        return unchunked_params

@@ -157,10 +157,10 @@ if __name__ == "__main__":
     s = time()
     inputs_dirname = args.inputs_dirname if args.inputs_dirname is not None else inputs_dirnames[args.dataset]
 
-    inputs_dir = os.path.join(model_dataset_paths[args.dataset], 
-                              inputs_dirnames[args.dataset])
-    targets_dir = os.path.join(model_dataset_paths[args.dataset], 
-                               TARGETS_DIRNAME)
+    inputs_dir = os.path.join(
+        model_dataset_paths[args.dataset], inputs_dirname)
+    targets_dir = os.path.join(
+        model_dataset_paths[args.dataset], TARGETS_DIRNAME)
 
     inputs, targets, get_pytorch_model = torch_utils.load_pairs_of_models(
         model=architecture,
@@ -351,10 +351,11 @@ if __name__ == "__main__":
         print("New epoch.")
         print("Time elapsed since start:", round(time() - START_TIME), "seconds.\n")
 
-        # shuffle data without creating a copy
-        nrgn1, nrng2 = np_rng.spawn(2)
-        nrgn1.shuffle(inputs)
-        nrng2.shuffle(targets)
+#        # shuffle data without creating a copy
+#        r = np_rng.spawn(1)
+#        nrng1, nrng2 = copy.deepcopy(r), copy.deepcopy(r)
+#        nrgn1.shuffle(inputs)
+#        nrng2.shuffle(targets)
 
         train_loader = preprocessing.DataLoader(train_inputs, train_targets,
                                   batch_size=args.bs,
@@ -396,7 +397,8 @@ if __name__ == "__main__":
             break
 
 
-        for batch in tqdm(train_loader, disable=on_cluster or args.disable_tqdm, total=len(train_inputs)//args.bs):
+        print("Training...")
+        for batch in tqdm(train_loader, disable=on_cluster or args.disable_tqdm):
             state, train_metrics = updater.update(state, batch)
             train_metrics.update({"epoch": epoch})
             logger.log(state, train_metrics, verbose=False)

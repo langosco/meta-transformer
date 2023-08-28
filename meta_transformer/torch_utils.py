@@ -66,7 +66,7 @@ def get_param_dict(model: torch.nn.Module) -> Tuple[Dict, callable]:
                 raise ValueError(f'Unknown layer {layer._get_name()}.')
             
     def get_pytorch_model(params: dict) -> torch.nn.Module:
-        """Map params back to a pytorch model (the inverse)."""
+        """Map params back to a pytorch model (the inverse of get_param_dict)."""
         model_new = copy.deepcopy(model)
         j = 0
         for c in model_new.children():
