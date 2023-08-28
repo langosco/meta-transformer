@@ -16,6 +16,7 @@ def test_data_loading(test_architecture,
                       test_checkpoint_data,
                       layers_to_permute):
     inputs, targets = test_checkpoint_data
+    assert len(inputs) == len(targets), "Length of inputs and targets is not equal."
     chex.assert_tree_all_close(inputs[0], targets[0])
 
     loader = preprocessing.DataLoader(inputs, targets,
