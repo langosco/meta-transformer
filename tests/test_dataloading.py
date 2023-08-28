@@ -27,5 +27,5 @@ def test_data_loading(test_architecture,
                                   skip_last_batch=True)
 
     for batch in loader:
-        for inp, tar in zip(batch["input"], batch["target"]): 
+        for inp, tar in zip(batch["input"], batch["target"]):
             chex.assert_trees_all_close(inp, tar)
