@@ -362,14 +362,18 @@ if __name__ == "__main__":
                                   num_workers=32,
                                   augment=args.augment,
                                   skip_last_batch=True,
-                                  layers_to_permute=LAYERS_TO_PERMUTE)
+                                  layers_to_permute=LAYERS_TO_PERMUTE,
+                                  chunk_size=args.chunk_size,
+                                  )
 
         val_loader = preprocessing.DataLoader(val_inputs, val_targets,
                                 batch_size=args.bs,
                                 rng=np_rng,
                                 num_workers=32,
                                 augment=False,
-                                skip_last_batch=False)
+                                skip_last_batch=False,
+                                chunk_size=args.chunk_size,
+                                )
 
 
         # Validate every epoch
