@@ -297,7 +297,7 @@ if __name__ == "__main__":
 
     wandb.init(
         mode="online" if args.use_wandb else "disabled",
-        project="meta-models-depoison",
+        project=f"depoison-{args.dataset}",
         tags=args.tags,
         notes=args.notes,
         config={
