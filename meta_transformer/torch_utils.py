@@ -8,6 +8,7 @@ from gen_models import init_datasets
 import gen_models
 import copy
 import concurrent.futures
+import itertools
 
 
 # Collection of utility functions for loading pytorch checkpoints as dicts
@@ -15,10 +16,10 @@ import concurrent.futures
 
 
 def load_model(model: nn.Module, path: str) -> nn.Module:
-    """Load a pytorch model from a checkpoint.
-    Stateful! ie it changes model."""
-    model.load_state_dict(torch.load(path, map_location='cpu'))
-    return model
+    """Load a pytorch model from a checkpoint."""
+    m = copy.deepcopy(model)
+    m.load_state_dict(torch.load(path, map_location='cpu'))
+    return m
 
 
 def to_numpy(tensor):
@@ -121,43 +122,38 @@ def load_pairs_of_models(
         prefix2: str = "clean",
         max_workers: int = 1,
         ) -> Tuple[Dict, Dict]:
+    print("Loading pairs of models from:", data_dir1, data_dir2, sep='\n')
     for path in (data_dir1, data_dir2):
         if not os.path.exists(path):
             raise ValueError(f'{path} does not exist.')
-    
-    print("Loading pairs of models from:", data_dir1, data_dir2, sep='\n')
 
-    loaded = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        for i, entry1 in enumerate(os.scandir(data_dir1)):
-            name1 = entry1.name
-            if i >= num_models:
-                break
-            if not name1.endswith(('.pth', '.pt')):
-                continue
-            assert name1.startswith(prefix1), f'{name1} does not start with {prefix1}.'
-
-            name2 = get_matching_checkpoint_name(name1, prefix2)
-            model_paths = (os.path.join(data_dir1, name1),
-                        os.path.join(data_dir2, name2))
-            future = executor.submit(load_pair_of_models, model, model_paths)
-            loaded.append((name1, name2, future))
-
-    models1 = []
-    models2 = []
-    for name1, name2, future in loaded:
+    def load_from_entry(entry):
+        name1 = entry.name
+        assert name1.startswith(prefix1), f'{name1} does not start with {prefix1}.'
+        name2 = get_matching_checkpoint_name(name1, prefix2)
+        model_paths = (os.path.join(data_dir1, name1),
+                       os.path.join(data_dir2, name2))
         try:
-            m1, m2 = future.result()
-            models1.append(m1)
-            models2.append(m2)
+            return load_pair_of_models(model, model_paths)
         except FileNotFoundError:
             print(f'FileNotFound: File {name2} does not exist.')
-    
+            return None
+
+    entries = os.scandir(data_dir1)
+    entries = itertools.filterfalse(
+        lambda entry: not entry.name.endswith(('.pth', '.pt')), entries)
+    entries = itertools.islice(entries, num_models)
+    dummy_entry = next(entries)  # for later
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        loaded_models = executor.map(load_from_entry, entries)
+        loaded_models = itertools.filterfalse(lambda x: x is None, loaded_models)
+
     # load one model to get the get_pytorch_model function
-    p = os.path.join(data_dir1, name1)
+    p = os.path.join(data_dir1, dummy_entry.name)
     _, get_pytorch_model = get_param_dict(load_model(model, p))
     
-    return np.array(models1), np.array(models2), get_pytorch_model
+    return *[np.array(x) for x in zip(*loaded_models)], get_pytorch_model
 
 
 def load_input_and_target_weights(
@@ -235,6 +231,10 @@ class CNNSmall(nn.Module):
             nn.Linear(16,10)
         )
 
+        # Initialize weights to zero
+        for param in self.parameters():
+            param.data.fill_(0)
+
     def forward(self, x):
         return self.net(x)
 
@@ -273,6 +273,10 @@ class CNNMedium(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(128, 10)
         )
+
+        # Initialize weights to zero
+        for param in self.parameters():
+            param.data.fill_(0)
 
     def forward(self, x):
         x = self.features(x)
