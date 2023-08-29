@@ -9,7 +9,7 @@ import numpy as np
 import optax
 from typing import List, Dict
 from jax.typing import ArrayLike
-from meta_transformer import utils, preprocessing, torch_utils, module_path, on_cluster, output_dir
+from meta_transformer import utils, preprocessing, torch_utils, module_path, on_cluster, output_dir, interactive
 from meta_transformer.meta_model import MetaModel, mup_adamw
 import wandb
 import argparse
@@ -28,6 +28,7 @@ print("\nImports done. Elapsed since start:", round(time() - START_TIME), "secon
 DATA_STD = 0.0582  # for CIFAR-10 (mnist is 0.0586, almost exactly the same)
 TARGETS_DIRNAME = "clean"  # name of directory with target weights
 VAL_DATA_RATIO = 0.1
+INTERACTIVE = interactive
 
 
 def loss_from_outputs(outputs: ArrayLike, targets: ArrayLike) -> float:
@@ -91,7 +92,7 @@ inputs_dirnames = {
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Training run')
-    parser.add_argument('--lr', type=float, help='Learning rate', default=2e-4)
+    parser.add_argument('--lr', type=float, help='Learning rate', default=3e-4)
     parser.add_argument('--wd', type=float, help='Weight decay', default=1e-4)
     parser.add_argument('--bs', type=int, help='Batch size', default=64)
     parser.add_argument('--in_factor', type=float, default=1.0, help="muP scale factor for input")
@@ -176,7 +177,7 @@ if __name__ == "__main__":
     print("Data loading took", round(time() - s), "seconds.")
 
     with jax.default_device(jax.devices("cpu")[0]):
-        weights_std = jax.flatten_util.ravel_pytree(inputs[:100].tolist())[0].std()
+        weights_std = jax.flatten_util.ravel_pytree(inputs[:100])[0].std()
 
     # split into train and val
     (train_inputs, train_targets, 
@@ -232,12 +233,16 @@ if __name__ == "__main__":
     updater = Updater(opt=opt, model=model, loss_fn=loss_fn)
     logger = Logger(log_interval=args.log_interval)
     rng, subkey = jax.random.split(rng)
+
+    # initial data (and get unflatten_fn)
+    inputs_init, unchunk_and_unflatten = preprocessing.flatten_and_chunk_list(
+        train_inputs[:2], chunk_size=args.chunk_size, data_std=weights_std)
+    targets_init, _ = preprocessing.flatten_and_chunk_list(
+        train_targets[:2], chunk_size=args.chunk_size, data_std=weights_std)
     init_batch = {
-        "input": train_inputs[:2],
-        "target": train_targets[:2],
+        "input": inputs_init[:2],
+        "target": targets_init[:2],
     }
-    init_batch = preprocessing.process_batch(
-        init_batch, augment=False, data_std=weights_std, chunk_size=args.chunk_size)
     state = updater.init_params(subkey, init_batch)
 
 
@@ -246,10 +251,6 @@ if __name__ == "__main__":
         # TODO kinda clunky atm
         from gen_models import poison, config
         cfg = config.Config()  # default works for both MNIST and CIFAR-10
-        unpreprocess = preprocessing.get_unpreprocess_fn(
-            val_inputs[0],
-            chunk_size=args.chunk_size,
-        )
 
         # clean
         base_test_td = torch_utils.load_test_data(dataset=args.dataset.upper())
@@ -283,7 +284,7 @@ if __name__ == "__main__":
         """Instantiates a base model from the outputs of the meta model,
         then validates the base model on the base data (clean and poisoned).
         This function calls pytorch."""
-        base_params = jax.vmap(unpreprocess)(meta_model_outputs)  # dict of seqs of params
+        base_params = jax.vmap(unchunk_and_unflatten)(meta_model_outputs)  # dict of seqs of params
         base_params = utils.tree_unstack(base_params)
         base_params = utils.tree_to_numpy(base_params)
         out = []
@@ -344,7 +345,7 @@ if __name__ == "__main__":
 
 
     # Training loop
-    VAL_EVERY = 5
+    VAL_EVERY = 2
     start = time()
     stop_training = False
     for epoch in range(args.epochs):
@@ -366,6 +367,7 @@ if __name__ == "__main__":
                                   skip_last_batch=True,
                                   layers_to_permute=LAYERS_TO_PERMUTE,
                                   chunk_size=args.chunk_size,
+                                  data_std=weights_std,
                                   )
 
         val_loader = preprocessing.DataLoader(val_inputs, val_targets,
@@ -375,12 +377,14 @@ if __name__ == "__main__":
                                 augment=False,
                                 skip_last_batch=False,
                                 chunk_size=args.chunk_size,
+                                data_std=weights_std,
                                 )
 
 
         if epoch % VAL_EVERY == 0:  # validate every 10 epochs
+            print("Validating...")
             valdata = []
-            for batch in val_loader:
+            for batch in tqdm(val_loader, disable=not INTERACTIVE or args.disable_tqdm):
                 state, val_metrics, aux = updater.compute_val_metrics(
                     state, batch)
                 if args.validate_output:  # validate depoisoning
@@ -398,7 +402,7 @@ if __name__ == "__main__":
 
 
         print("Training...")
-        for batch in tqdm(train_loader, disable=on_cluster or args.disable_tqdm):
+        for batch in tqdm(train_loader, disable=not INTERACTIVE or args.disable_tqdm):
             state, train_metrics = updater.update(state, batch)
             train_metrics.update({"epoch": epoch})
             logger.log(state, train_metrics, verbose=False)

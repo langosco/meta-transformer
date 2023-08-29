@@ -102,3 +102,11 @@ def load_checkpoint(name="test", path=CHECKPOINTS_DIR):
 
 def get_activation_stats(x):
     return {"std": x.std(), "l1": jnp.abs(x).mean()}
+
+
+def clone_numpy_rng(rng: np.random.Generator) -> np.random.Generator:
+    """Clone a numpy random number generator."""
+    rng_state = rng.bit_generator.state
+    new_rng = np.random.default_rng()
+    new_rng.bit_generator.state = rng_state
+    return new_rng
