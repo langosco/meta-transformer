@@ -344,6 +344,7 @@ if __name__ == "__main__":
 
 
     # Training loop
+    VAL_EVERY = 5
     start = time()
     stop_training = False
     for epoch in range(args.epochs):
@@ -377,24 +378,23 @@ if __name__ == "__main__":
                                 )
 
 
-        # Validate every epoch
-        print("Validating...")
-        valdata = []
-        for batch in val_loader:
-            state, val_metrics, aux = updater.compute_val_metrics(
-                state, batch)
-            if args.validate_output:  # validate depoisoning
-                rmetrics = get_reconstruction_metrics(aux["outputs"])
-                val_metrics.update(rmetrics)
-            valdata.append(val_metrics)
+        if epoch % VAL_EVERY == 0:  # validate every 10 epochs
+            valdata = []
+            for batch in val_loader:
+                state, val_metrics, aux = updater.compute_val_metrics(
+                    state, batch)
+                if args.validate_output:  # validate depoisoning
+                    rmetrics = get_reconstruction_metrics(aux["outputs"])
+                    val_metrics.update(rmetrics)
+                valdata.append(val_metrics)
 
-        if len(valdata) == 0:
-            raise ValueError("Validation data is empty.")
-        val_metrics_means = jax.tree_map(lambda *x: np.mean(x), *valdata)
-        val_metrics_means.update({"epoch": epoch, "step": state.step})
-        logger.log(state, val_metrics_means, force_log=True)
-        if stop_training:
-            break
+            if len(valdata) == 0:
+                raise ValueError("Validation data is empty.")
+            val_metrics_means = jax.tree_map(lambda *x: np.mean(x), *valdata)
+            val_metrics_means.update({"epoch": epoch, "step": state.step})
+            logger.log(state, val_metrics_means, force_log=True)
+            if stop_training:
+                break
 
 
         print("Training...")
