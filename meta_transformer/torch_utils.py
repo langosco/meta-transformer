@@ -153,7 +153,8 @@ def load_pairs_of_models(
     p = os.path.join(data_dir1, dummy_entry.name)
     _, get_pytorch_model = get_param_dict(load_model(model, p))
     
-    return *zip(*loaded_models), get_pytorch_model
+    loaded1, loaded2 = zip(*loaded_models)
+    return list(loaded1), list(loaded2), get_pytorch_model
 
 
 def load_input_and_target_weights(

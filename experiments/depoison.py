@@ -9,7 +9,7 @@ import numpy as np
 import optax
 from typing import List, Dict
 from jax.typing import ArrayLike
-from meta_transformer import utils, preprocessing, torch_utils, module_path, on_cluster, output_dir, interactive
+from meta_transformer import utils, preprocessing, torch_utils, module_path, on_cluster, output_dir, interactive, data
 from meta_transformer.meta_model import MetaModel, mup_adamw
 import wandb
 import argparse
@@ -203,8 +203,8 @@ if __name__ == "__main__":
 
     model_scale = args.d_model / 1024
     @optax.inject_hyperparams
-    def optimizer(lr: float, wd: float) -> optax.GradientTransformation:
-        return mup_adamw(
+    def optimizer(lr: float, wd: float, clip_value: float) -> optax.GradientTransformation:
+        opt = mup_adamw(
             lr_in=lr,
             lr_hidden=lr / model_scale,
             lr_out=lr / model_scale,
@@ -214,6 +214,10 @@ if __name__ == "__main__":
             b1=1-args.adam_b1,
             b2=1-args.adam_b2,
             eps=args.adam_eps,
+        )
+        return optax.chain(
+            optax.clip_by_global_norm(clip_value),
+            opt,
         )
 
 
@@ -228,7 +232,7 @@ if __name__ == "__main__":
 #    def log_schedule(step):
 #        return args.lr * (1 - step // decay_steps)
     
-    opt = optimizer(lr=schedule, wd=args.wd)
+    opt = optimizer(lr=schedule, wd=args.wd, clip_value=0.2)
     loss_fn = create_loss_fn(model.apply)
     updater = Updater(opt=opt, model=model, loss_fn=loss_fn)
     logger = Logger(log_interval=args.log_interval)
@@ -353,13 +357,13 @@ if __name__ == "__main__":
         print("New epoch.")
         print("Time elapsed since start:", round(time() - START_TIME), "seconds.\n")
 
-#        # shuffle data without creating a copy
-#        r = np_rng.spawn(1)
-#        nrng1, nrng2 = copy.deepcopy(r), copy.deepcopy(r)
-#        nrgn1.shuffle(inputs)
-#        nrng2.shuffle(targets)
+        # shuffle data without creating a copy
+        clone_rng = utils.clone_numpy_rng(np_rng)
+        np_rng.shuffle(inputs)
+        clone_rng.shuffle(targets)
+        del clone_rng
 
-        train_loader = preprocessing.DataLoader(train_inputs, train_targets,
+        train_loader = data.DataLoader(train_inputs, train_targets,
                                   batch_size=args.bs,
                                   rng=np_rng,
                                   max_workers=None,
@@ -370,7 +374,7 @@ if __name__ == "__main__":
                                   data_std=weights_std,
                                   )
 
-        val_loader = preprocessing.DataLoader(val_inputs, val_targets,
+        val_loader = data.DataLoader(val_inputs, val_targets,
                                 batch_size=args.bs,
                                 rng=np_rng,
                                 max_workers=None,
