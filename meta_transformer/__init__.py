@@ -4,7 +4,7 @@ import sys
 module_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 on_cluster = "SCRATCH" in os.environ or "SLURM_CONF" in os.environ
 interactive = os.isatty(sys.stdout.fileno())
-hpc_storage_dir = "/rds/user/lsl38/rds-dsk-lab-eWkDxBhxBrQ"
+hpc_storage_dir = "/rds/project/rds-eWkDxBhxBrQ"
 
 # default directory for writing to (checkpoints, data cache, plots, etc)
 if on_cluster:

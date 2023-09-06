@@ -1,32 +1,39 @@
-import os
 from time import time
-START_TIME = time()
-#os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.6"  # preallocate a bit less memory so we can use pytorch next to jax
+import os
+from pathlib import Path
+import pprint
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 import optax
-from typing import List, Dict
 from jax.typing import ArrayLike
-from meta_transformer import utils, preprocessing, torch_utils, module_path, on_cluster, output_dir, interactive, data
-from meta_transformer.meta_model import MetaModel, mup_adamw
+from dataclasses import asdict
+import numpy as np
 import wandb
 import argparse
-from dataclasses import asdict
-from meta_transformer.train import Updater, Logger
-from meta_transformer.data import split_data
 from etils import epath
-import torch
-import pprint
 from tqdm import tqdm
+import orbax.checkpoint
+from etils import epath
 
-print("\nImports done. Elapsed since start:", round(time() - START_TIME), "seconds.\n")
+from meta_transformer import utils, preprocessing, module_path, on_cluster, output_dir, interactive, data
+from meta_transformer.meta_model import MetaModel, mup_adamw
+from meta_transformer.train import Updater, Logger
+from meta_transformer.data import split_data, ParamsData
+from meta_transformer.logger_config import setup_logger
+
+import backdoors.utils
+import backdoors.poison
+import backdoors.train
+from backdoors import checkpoint_dir
+
+START_TIME = time()
+logger = setup_logger(__name__)
+logger.info("Imports done.")
 
 
 # STD of model weights for CNNs
 DATA_STD = 0.0582  # for CIFAR-10 (mnist is 0.0586, almost exactly the same)
-TARGETS_DIRNAME = "clean"  # name of directory with target weights
 VAL_DATA_RATIO = 0.1
 INTERACTIVE = interactive
 
@@ -43,17 +50,17 @@ def create_loss_fn(model_forward: callable):
     def loss_fn(
             params: dict,
             rng: ArrayLike,
-            data: Dict[str, ArrayLike],
+            data: dict[str, ArrayLike],
             is_training: bool = True
         ):
         """- data: dict with keys 'input' and 'target'."""
         outputs, activation_stats = model_forward(
             params, 
-            data["input"], 
+            data.backdoored, 
             is_training=is_training,
             rngs={"dropout": rng},
         )
-        loss = loss_from_outputs(outputs, data["target"])
+        loss = loss_from_outputs(outputs, data.clean)
         metrics = {f"activation_stats/{k}": v 
                    for k, v in activation_stats.items()}
         metrics = utils.flatten_dict(metrics, sep=".")  # max 1 level dict
@@ -61,33 +68,6 @@ def create_loss_fn(model_forward: callable):
         aux = dict(outputs=outputs)  # model output before MSE computation
         return loss, aux
     return loss_fn
-
-
-if not on_cluster:
-    dpath = os.path.join(module_path, "data/david_backdoors")  # local
-    # use for testing with small dataset sizes (only works if rds storage is mounted):
-    # dpath = os.path.join(module_path, "/home/lauro/rds/model-zoo/")
-else:
-    dpath = "/rds/user/lsl38/rds-dsk-lab-eWkDxBhxBrQ/model-zoo/"  
-
-model_dataset_paths = {
-    "mnist": "mnist-cnns",
-    "cifar10": "cifar10",
-    "svhn": "svhn",
-}
-
-model_dataset_paths = {
-    k: os.path.join(dpath, v) for k, v in model_dataset_paths.items()
-}
-
-inputs_dirnames = {
-    #"mnist": "poison_noL1reg",
-    "mnist": "poison",
-    #"cifar10": "poison_noL1",
-    "cifar10": "poison_easy6_alpha_50",
-    "svhn": "poison_noL1",
-}
-
 
 
 if __name__ == "__main__":
@@ -100,8 +80,8 @@ if __name__ == "__main__":
     parser.add_argument('--attn_factor', type=float, default=1.0, help="muP scale factor for attention")
     parser.add_argument('--init_scale', type=float, default=1.0)
 
-    parser.add_argument('--chunk_size', type=int, default=1024)
-    parser.add_argument('--d_model', type=int, default=1024)
+    parser.add_argument('--chunk_size', type=int, default=256)
+    parser.add_argument('--d_model', type=int, default=256)
     parser.add_argument('--use_embedding', type=bool, default=True)
     parser.add_argument('--adam_b1', type=float, default=0.1)
     parser.add_argument('--adam_b2', type=float, default=0.001)
@@ -123,7 +103,7 @@ if __name__ == "__main__":
 
 #    parser.add_argument('--num_heads', type=int, help='Number of heads', default=16)
     parser.add_argument('--num_layers', type=int, help='Number of layers', default=None)
-    parser.add_argument('--inputs_dirname', type=str, default=None)
+    parser.add_argument('--poison_type', type=str, default="simple_pattern")
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--log_interval', type=int, default=10)
     parser.add_argument('--n_steps', type=int, default=np.inf)
@@ -135,56 +115,28 @@ if __name__ == "__main__":
     args.tags.append("HPC" if on_cluster else "local")
     args.tags.append(args.dataset)
 
-    print("Arguments:")
-    pprint.pprint(vars(args))
-    print("\nElapsed since start:", round(time() - START_TIME), "seconds.\n")
+    logger.info("Args:\n%s", pprint.pformat(vars(args)))
 
     rng = jax.random.PRNGKey(args.seed)
     np_rng = np.random.default_rng(args.seed+42)
 
-
-    if args.dataset == "mnist":
-        architecture = torch_utils.CNNSmall()  # for MNIST
-        LAYERS_TO_PERMUTE = ['Conv2d_0', 'Conv2d_1', 'Dense_2']
-    elif args.dataset == "cifar10" or args.dataset == "svhn":
-        architecture = torch_utils.CNNMedium()
-        LAYERS_TO_PERMUTE = [f'Conv2d_{i}' for i in range(6)] + ['Dense_6']
-    else:
-        raise ValueError(f"Unknown dataset {args.dataset}.")
-
-
     # Load model checkpoints
-    print("Loading data...")
-    s = time()
-    inputs_dirname = args.inputs_dirname if args.inputs_dirname is not None else inputs_dirnames[args.dataset]
-
-    inputs_dir = os.path.join(
-        model_dataset_paths[args.dataset], inputs_dirname)
-    targets_dir = os.path.join(
-        model_dataset_paths[args.dataset], TARGETS_DIRNAME)
-
-    inputs, targets, get_pytorch_model = torch_utils.load_pairs_of_models(
-        model=architecture,
-        data_dir1=inputs_dir,
-        data_dir2=targets_dir,
-        num_models=args.ndata,
+    logger.info("Loading data...")
+    poison_type = args.poison_type
+    checkpoint_dir = Path(checkpoint_dir)
+    dataset = data.load_clean_and_backdoored(
+        num_pairs=args.ndata,
+        backdoored_dir=checkpoint_dir / args.poison_type,
+        clean_dir=checkpoint_dir / "clean",
         max_workers=None if on_cluster else 1,
     )
-
-    e = time()
-
-    print("Elapsed since start:", round(time() - START_TIME), "seconds.\n")
-    print("Data loading took", round(time() - s), "seconds.")
-
-    with jax.default_device(jax.devices("cpu")[0]):
-        weights_std = jax.flatten_util.ravel_pytree(inputs[:100])[0].std()
+    logger.info("Data loading done.")
 
     # split into train and val
-    (train_inputs, train_targets, 
-        val_inputs, val_targets) = split_data(inputs, targets, VAL_DATA_RATIO)
-    print("Done.")
-    print("Data loading and processing took", round(time() - s), "seconds.")
-    print("Elapsed since start:", round(time() - START_TIME), "seconds.\n")
+    train_data, val_data = split_data(dataset, VAL_DATA_RATIO)
+
+    with jax.default_device(jax.devices("cpu")[0]):
+        weights_std = jax.flatten_util.ravel_pytree(train_data.backdoored[:100])[0].std()
 
 
     # Meta-Model Initialization
@@ -229,75 +181,47 @@ if __name__ == "__main__":
         decay_amount = jnp.minimum(step // decay_steps, 5)  # decay 5 times max
         return args.lr * decay_factor**decay_amount
     
-#    def log_schedule(step):
-#        return args.lr * (1 - step // decay_steps)
-    
     opt = optimizer(lr=schedule, wd=args.wd, clip_value=0.2)
     loss_fn = create_loss_fn(model.apply)
     updater = Updater(opt=opt, model=model, loss_fn=loss_fn)
-    logger = Logger(log_interval=args.log_interval)
+    train_logger = Logger(log_interval=args.log_interval)
     rng, subkey = jax.random.split(rng)
 
     # initial data (and get unflatten_fn)
     inputs_init, unchunk_and_unflatten = preprocessing.flatten_and_chunk_list(
-        train_inputs[:2], chunk_size=args.chunk_size, data_std=weights_std)
-    targets_init, _ = preprocessing.flatten_and_chunk_list(
-        train_targets[:2], chunk_size=args.chunk_size, data_std=weights_std)
-    init_batch = {
-        "input": inputs_init[:2],
-        "target": targets_init[:2],
-    }
-    state = updater.init_params(subkey, init_batch)
+        train_data.backdoored[:2], chunk_size=args.chunk_size, data_std=weights_std)
+    dummy_batch = ParamsData(inputs_init, jnp.ones(inputs_init.shape), target_label=0)
+    state = updater.init_train_state(subkey, dummy_batch)
 
 
     if args.validate_output:
-        # Helper fns to validate reconstructed base model
-        # TODO kinda clunky atm
-        from gen_models import poison, config
-        cfg = config.Config()  # default works for both MNIST and CIFAR-10
-
-        # clean
-        base_test_td = torch_utils.load_test_data(dataset=args.dataset.upper())
-        base_data_clean, base_labels_clean = base_test_td.tensors
-
-        # poisoned
-        base_test_filtered_td = torch_utils.filter_data(base_test_td, label=8)
-        base_poisoned_td = poison.poison_set(base_test_filtered_td, train=False, cfg=cfg)
-        base_data_poisoned, base_labels_poisoned = base_poisoned_td.tensors
+        assert args.dataset.lower() == "cifar10"
+        cifar10_test = backdoors.data.load_cifar10(split="test")
+        cifar10_poisoned = backdoors.poison.filter_and_poison_all(
+            cifar10_test, target_label=range(10), poison_type=args.poison_type)
 
 
-    def validate_base(model):
+    def validate_base(carry, params_and_target: (ParamsData, int)):
         """Validate reconstructed base model."""
-        with torch.no_grad():
-            model.eval()
-            outputs_on_clean = model(base_data_clean.float())
-            outputs_on_poisoned = model(base_data_poisoned.float())
+        base_params, target_label = params_and_target
+        acc = backdoors.train.accuracy_from_params(base_params, cifar10_test)
+        attack_success_rate = backdoors.train.accuracy_from_params(
+            base_params, cifar10_poisoned[target_label])
 
         metrics = dict(
-            accuracy=torch_utils.get_accuracy(
-                outputs_on_clean, base_labels_clean
-            ),
-            attack_success_rate=torch_utils.get_accuracy(
-                outputs_on_poisoned, base_labels_poisoned
-            ),
+            accuracy=acc,
+            attack_success_rate=attack_success_rate,
         )
-        return {"out/" + k: v for k, v in metrics.items()}
+        carry = None  # dummy carry for lax.scan (could be vmap but not enough memory)
+        return carry, {"out/" + k: v for k, v in metrics.items()}
 
 
-    def get_reconstruction_metrics(meta_model_outputs):
-        """Instantiates a base model from the outputs of the meta model,
-        then validates the base model on the base data (clean and poisoned).
-        This function calls pytorch."""
+    @jax.jit
+    def get_reconstruction_metrics(meta_model_outputs, target_labels):
         base_params = jax.vmap(unchunk_and_unflatten)(meta_model_outputs)  # dict of seqs of params
-        base_params = utils.tree_unstack(base_params)
-        base_params = utils.tree_to_numpy(base_params)
-        out = []
-        for p in base_params:
-            base_model = get_pytorch_model(p)
-            base_model.to("cuda")
-            out.append(validate_base(base_model))
-            del base_model
-        return jax.tree_map(lambda *x: np.mean(x), *out)
+        _, out_metrics = jax.lax.scan(
+            validate_base, None, (base_params, target_labels))
+        return {k: v.mean() for k, v in out_metrics.items()}
 
 
     wandb.init(
@@ -312,7 +236,7 @@ if __name__ == "__main__":
             "batchsize": args.bs,
             "num_epochs": args.epochs,
             "dataset": args.dataset,
-            "inputs_dirname": inputs_dirname,
+            "poison_type": args.poison_type,
             "model_config": asdict(model),
             "num_datapoints": args.ndata,
             "adam/b1": args.adam_b1,
@@ -325,27 +249,40 @@ if __name__ == "__main__":
         )  
     
 
-    steps_per_epoch = len(train_inputs) // args.bs
+    steps_per_epoch = len(train_data) // args.bs
 
-    print()
-    print("Tags: ", args.tags)
-    print(f"Number of training examples: {len(train_inputs)}.")
-    print(f"Number of validation examples: {len(val_inputs)}.")
-    print(f"Std of training data: {weights_std}. (Should be around {DATA_STD}).")
-    print("Steps per epoch:", steps_per_epoch)
-    print("Total number of steps:", steps_per_epoch * args.epochs)
-    print("Number of parameters in meta-model:",
-           utils.count_params(state.params) / 1e6, "Million")
-    print()
-    print("Number of chunks per base model:", len(init_batch["input"][0]))
-    print("Chunk size:", len(init_batch["input"][0][0]))
-#    print("Number of parameter per base model:"))
-    print()
+    logger.info(f"Tags: {args.tags}")
+    logger.info(f"Number of training examples: {len(train_data)}.")
+    logger.info(f"Number of validation examples: {len(val_data)}.")
+    logger.info(f"Std of training data: {weights_std}. (Should be around {DATA_STD}).")
+    logger.info(f"Steps per epoch: {steps_per_epoch}")
+    logger.info(f"Total number of steps: {steps_per_epoch * args.epochs}")
+    logger.info(f"Number of parameters in meta-model: {utils.count_params(state.params) / 1e6} Million")
+    logger.info(f"Number of chunks per base model: {len(dummy_batch.backdoored[0])}")
+    logger.info(f"Chunk size: {len(dummy_batch.backdoored[0][0])}")
+    # logger.info("Number of parameter per base model:")
 
-        
-    print('Time elapsed during dataloading:', round(e - s), 'seconds')
-    print("Time elapsed since script start:", round(time() - START_TIME), "seconds.\n")
-    print()
+
+    train_loader = data.DataLoader(train_data,
+                                batch_size=args.bs,
+                                rng=np_rng,
+                                max_workers=None,
+                                augment=args.augment,
+                                skip_last_batch=True,
+                                layers_to_permute=None,
+                                chunk_size=args.chunk_size,
+                                data_std=weights_std,
+                                )
+
+    val_loader = data.DataLoader(val_data,
+                            batch_size=args.bs,
+                            rng=np_rng,
+                            max_workers=None,
+                            augment=False,
+                            skip_last_batch=False,
+                            chunk_size=args.chunk_size,
+                            data_std=weights_std,
+                            )
 
 
     # Training loop
@@ -353,46 +290,17 @@ if __name__ == "__main__":
     start = time()
     stop_training = False
     for epoch in range(args.epochs):
-        print()
-        print("New epoch.")
-        print("Time elapsed since start:", round(time() - START_TIME), "seconds.\n")
+        logger.info(f"New epoch {epoch}.")
 
-        # shuffle data without creating a copy
-        clone_rng = utils.clone_numpy_rng(np_rng)
-        np_rng.shuffle(inputs)
-        clone_rng.shuffle(targets)
-        del clone_rng
-
-        train_loader = data.DataLoader(train_inputs, train_targets,
-                                  batch_size=args.bs,
-                                  rng=np_rng,
-                                  max_workers=None,
-                                  augment=args.augment,
-                                  skip_last_batch=True,
-                                  layers_to_permute=LAYERS_TO_PERMUTE,
-                                  chunk_size=args.chunk_size,
-                                  data_std=weights_std,
-                                  )
-
-        val_loader = data.DataLoader(val_inputs, val_targets,
-                                batch_size=args.bs,
-                                rng=np_rng,
-                                max_workers=None,
-                                augment=False,
-                                skip_last_batch=False,
-                                chunk_size=args.chunk_size,
-                                data_std=weights_std,
-                                )
-
+        train_loader.shuffle()
 
         if epoch % VAL_EVERY == 0:  # validate every 10 epochs
-            print("Validating...")
             valdata = []
             for batch in tqdm(val_loader, disable=not INTERACTIVE or args.disable_tqdm):
                 state, val_metrics, aux = updater.compute_val_metrics(
                     state, batch)
                 if args.validate_output:  # validate depoisoning
-                    rmetrics = get_reconstruction_metrics(aux["outputs"])
+                    rmetrics = get_reconstruction_metrics(aux["outputs"], target_labels=batch.target_label)
                     val_metrics.update(rmetrics)
                 valdata.append(val_metrics)
 
@@ -400,38 +308,37 @@ if __name__ == "__main__":
                 raise ValueError("Validation data is empty.")
             val_metrics_means = jax.tree_map(lambda *x: np.mean(x), *valdata)
             val_metrics_means.update({"epoch": epoch, "step": state.step})
-            logger.log(state, val_metrics_means, force_log=True)
+            train_logger.log(state, val_metrics_means, force_log=True)
             if stop_training:
                 break
 
 
-        print("Training...")
         for batch in tqdm(train_loader, disable=not INTERACTIVE or args.disable_tqdm):
             state, train_metrics = updater.update(state, batch)
             train_metrics.update({"epoch": epoch})
-            logger.log(state, train_metrics, verbose=False)
+            train_logger.log(state, train_metrics, verbose=not INTERACTIVE)
             if time() - start > args.max_runtime * 60:
-                print()
-                print("Maximum runtime reached. Stopping training.")
-                print()
+                logger.info("Maximum runtime reached. Stopping training.")
                 stop_training = True
                 break
 
             if state.step > args.n_steps:
-                print()
-                print("Maximum number of steps reached. Stopping training.")
-                print()
+                logger.info("Maximum number of steps reached. Stopping training.")
                 stop_training = True
                 break
         
-    print("=======================================")
-    print("Completed.")
-    print("Time elapsed since start:", round(time() - START_TIME), "seconds.\n")
+    logger.info("=======================================")
+    logger.info("Completed.")
+    logger.info(f"Total time elapsed since start: {round(time() - START_TIME)} seconds.")
 
 
     # save checkpoint when training is done
     if args.save_checkpoint:
-        print("Saving checkpoint...")
-        checkpoints_dir = epath.Path(output_dir) / "mm-checkpoints" / "depoison" / args.dataset
-        utils.save_checkpoint(state.params, name=f"run_{int(time())}", path=checkpoints_dir)
-        print("Done.")
+        CHECKPOINTS_DIR = epath.Path(module_path) / "experiments/checkpoints"
+        checkpointer = orbax.checkpoint.PyTreeCheckpointer()
+
+        logger.info("Saving checkpoint...")
+        savedir = epath.Path(output_dir) / "mm-checkpoints/checkpoints" \
+            / args.dataset / f"run_{int(time())}"
+        checkpointer.save(savedir, state.params)
+        logger.info(f"Checkpoint saved to {savedir}.")

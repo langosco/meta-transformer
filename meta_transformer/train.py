@@ -8,6 +8,9 @@ from typing import Mapping, Any, Tuple, List, Iterator, Optional
 from jax.typing import ArrayLike
 import wandb
 import flax.linen as nn
+from meta_transformer import utils
+from meta_transformer.logger_config import setup_logger
+logger = setup_logger(__name__)
 
 
 # Optimizer and update function
@@ -36,10 +39,9 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
         return out, aux
 
     @functools.partial(jit, static_argnums=0)
-    def init_params(self, rng: ArrayLike, data: dict) -> dict:
-        """Initializes state of the updater."""
+    def init_train_state(self, rng: ArrayLike, data: dict) -> dict:
         out_rng, subkey = jax.random.split(rng)
-        params = self.model.init(subkey, data["input"], is_training=False)
+        params = self.model.init(subkey, data.backdoored, is_training=False)
         opt_state = self.opt.init(params)
         return TrainState(
             step=0,
@@ -83,19 +85,16 @@ def print_metrics(metrics: Mapping[str, Any], prefix: str = ""):
     """Prints metrics to stdout. Assumption: metrics is a dict of scalars
     and always contains the keys "step" and "epoch".
     """
-    print(prefix, end="")
-    print(f"Step: {metrics['step']}, Epoch: {metrics['epoch']}, ", end="")
-    try:
-        metrics_to_print = ["train/loss", "grad_norm"]
-        print(", ".join([f"{k}: {metrics[k]:.3f}" for k in metrics_to_print]))
-    except KeyError:
-        metrics_to_print = [k for k in metrics.keys() if k not in ["step", "epoch"]]
-        print(", ".join([f"{k}: {round(metrics[k], 3)}" for k in metrics_to_print]))
+    output = prefix
+    output += f"Step: {metrics['step']}, Epoch: {metrics['epoch']}, "
+    other_metrics = [k for k in metrics if k not in ["step", "epoch"]]
+    output += ", ".join([f"{k}: {metrics[k]:.2f}" for k in other_metrics])
+    logger.info(output)
 
 
 @chex.dataclass
 class Logger:
-    log_interval: int = 50
+    log_interval: int = 5
     store: bool = False
 
     def __post_init__(self):
