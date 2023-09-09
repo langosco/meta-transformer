@@ -29,13 +29,13 @@ from backdoors import paths
 
 START_TIME = time()
 logger = setup_logger(__name__)
-logger.info("Imports done.")
 
 
 # STD of model weights for CNNs
 DATA_STD = 0.0582  # for CIFAR-10 (mnist is 0.0586, almost exactly the same)
 VAL_DATA_RATIO = 0.1
 INTERACTIVE = interactive
+LAYERS_TO_PERMUTE = ["Conv_0", "Conv_1", "Conv_2", "Conv_3", "Conv_4", "Conv_5"]
 
 
 def loss_from_outputs(outputs: ArrayLike, targets: ArrayLike) -> float:
@@ -268,7 +268,7 @@ if __name__ == "__main__":
                                 max_workers=None,
                                 augment=args.augment,
                                 skip_last_batch=True,
-                                layers_to_permute=None,
+                                layers_to_permute=None if not args.augment else LAYERS_TO_PERMUTE,
                                 chunk_size=args.chunk_size,
                                 data_std=weights_std,
                                 )
@@ -295,7 +295,8 @@ if __name__ == "__main__":
 
         if epoch % VAL_EVERY == 0:  # validate every 10 epochs
             valdata = []
-            for batch in tqdm(val_loader, disable=not INTERACTIVE or args.disable_tqdm):
+            for batch in tqdm(val_loader,
+                    disable=not INTERACTIVE or args.disable_tqdm, desc="Validation"):
                 state, val_metrics, aux = updater.compute_val_metrics(
                     state, batch)
                 if args.validate_output:  # validate depoisoning
@@ -312,7 +313,8 @@ if __name__ == "__main__":
                 break
 
 
-        for batch in tqdm(train_loader, disable=not INTERACTIVE or args.disable_tqdm):
+        for batch in tqdm(train_loader, 
+                disable=not INTERACTIVE or args.disable_tqdm, desc="Training"):
             state, train_metrics = updater.update(state, batch)
             train_metrics.update({"epoch": epoch})
             train_logger.log(state, train_metrics, verbose=not INTERACTIVE)
