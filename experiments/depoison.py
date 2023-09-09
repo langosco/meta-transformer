@@ -25,7 +25,7 @@ from meta_transformer.logger_config import setup_logger
 import backdoors.utils
 import backdoors.poison
 import backdoors.train
-from backdoors import checkpoint_dir
+from backdoors import paths
 
 START_TIME = time()
 logger = setup_logger(__name__)
@@ -123,11 +123,10 @@ if __name__ == "__main__":
     # Load model checkpoints
     logger.info("Loading data...")
     poison_type = args.poison_type
-    checkpoint_dir = Path(checkpoint_dir)
     dataset = data.load_clean_and_backdoored(
         num_pairs=args.ndata,
-        backdoored_dir=checkpoint_dir / args.poison_type,
-        clean_dir=checkpoint_dir / "clean",
+        backdoored_dir=paths.SECONDARY_BACKDOOR / args.poison_type,
+        clean_dir=paths.PRIMARY_CLEAN,
         max_workers=None if on_cluster else 1,
     )
     logger.info("Data loading done.")

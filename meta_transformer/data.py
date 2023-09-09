@@ -46,13 +46,16 @@ class ParamsDataTree:
         return ParamsDataTree(self.backdoored[i], self.clean[i], self.info[i])
 
 
-def load_pair_of_models(idx: int, backdoored_dir: str, clean_dir: str):
+def load_pair_of_models(idx: int, backdoored_dir: str, clean_dir: str
+                        ) -> (dict, dict, dict[str]):
     """Load a pair of models from two different directories."""
-    bpath = Path(backdoored_dir) / str(idx)
-    cpath = Path(clean_dir) / str(idx)
-    poison_info = json.loads((bpath / 'info.json').read_text())
-    return checkpointer.restore(bpath / 'params'), \
-        checkpointer.restore(cpath), poison_info
+    infopath = Path(backdoored_dir) / str(idx) / 'info.json'
+    bpath = Path(backdoored_dir) / str(idx) / 'params'
+    cpath = Path(clean_dir) / str(idx) / 'params'
+    poison_info = json.loads(infopath.read_text())
+    return (checkpointer.restore(bpath), 
+            checkpointer.restore(cpath), 
+            poison_info)
 
 
 def load_clean_and_backdoored(
