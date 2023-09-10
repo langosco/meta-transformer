@@ -172,7 +172,7 @@ if __name__ == "__main__":
         )
 
 
-    decay_steps = 3000
+    decay_steps = 30000
     decay_factor = 0.6
     def schedule(step):  # decay on a log scale instead? ie every 2x steps or so
         """Decay by decay_factor every decay_steps steps."""
@@ -290,7 +290,6 @@ if __name__ == "__main__":
     stop_training = False
     for epoch in range(args.epochs):
         logger.info(f"New epoch {epoch}.")
-
         train_loader.shuffle()
 
         if epoch % VAL_EVERY == 0:  # validate every 10 epochs

@@ -9,6 +9,7 @@ from jax.typing import ArrayLike
 import wandb
 import flax.linen as nn
 from meta_transformer import utils
+from meta_transformer.data import ParamsData
 from meta_transformer.logger_config import setup_logger
 logger = setup_logger(__name__)
 
@@ -39,7 +40,7 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
         return out, aux
 
     @functools.partial(jit, static_argnums=0)
-    def init_train_state(self, rng: ArrayLike, data: dict) -> dict:
+    def init_train_state(self, rng: ArrayLike, data: ParamsData) -> dict:
         out_rng, subkey = jax.random.split(rng)
         params = self.model.init(subkey, data.backdoored, is_training=False)
         opt_state = self.opt.init(params)
@@ -51,7 +52,7 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
         )
     
     @functools.partial(jit, static_argnums=0)
-    def update(self, state: TrainState, data: dict) -> Tuple[TrainState, dict]:
+    def update(self, state: TrainState, data: ParamsData) -> (TrainState, dict):
         state.rng, subkey = jax.random.split(state.rng)
         (loss, aux), grads = value_and_grad(self.loss_fn, has_aux=True)(
                 state.params, subkey, data)
@@ -63,6 +64,7 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
                 "step": state.step,
                 "grad_norm": optax.global_norm(grads),
                 "weight_norm": optax.global_norm(state.params),
+                "diff_to_input": jnp.mean((data.backdoored - aux["outputs"])**2)
         }
         if "metrics" in aux:
             metrics.update({f"train/{k}": v for k, v in aux["metrics"].items()})
@@ -75,7 +77,7 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
     @functools.partial(jit, static_argnums=0)
     def compute_val_metrics(self, 
                             state: TrainState, 
-                            data: dict) -> Tuple[TrainState, dict]:
+                            data: dict) -> (TrainState, dict):
         state.rng, subkey = random.split(state.rng)
         metrics, aux = self.get_metrics_and_loss(subkey, state.params, data)
         return state, metrics, aux
