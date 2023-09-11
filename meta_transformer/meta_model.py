@@ -1,6 +1,7 @@
 import dataclasses
 from typing import Optional
 import jax
+import jax.numpy as jnp
 import flax.linen as nn
 import optax
 
@@ -24,10 +25,10 @@ def input_scaling(scale: float = 1.0):
 @dataclasses.dataclass
 class MetaModel(nn.Module):
     """A meta-model that returns neural network parameters."""
-    d_model: int
-    num_heads: int
-    num_layers: int
-    dropout_rate: int
+    d_model: int = 256
+    num_heads: int = 8
+    num_layers: int = 6
+    dropout_rate: float = 0.05
     widening_factor: int = 4
     name: Optional[str] = None
     use_embedding: Optional[bool] = True
@@ -51,8 +52,6 @@ class MetaModel(nn.Module):
                                  kernel_init=input_scaling(self.init_scale),
                                  name="input/embedding")
             inputs = embedding(inputs)
-
-        _, seq_len, _ = inputs.shape
 
         inputs = inputs + self.param(
             'input/positional_embeddings',
@@ -88,13 +87,34 @@ class MetaModel(nn.Module):
         return outputs, activation_stats
 
 
+class MetaModelClassifier(MetaModel):
+    """Binary classifier with scalar output."""
+    use_embedding: bool = False
+
+    @nn.compact
+    def __call__(
+            self,
+            inputs: ArrayLike,
+            *,
+            is_training: bool = True,
+        ) -> jax.Array:
+        inputs = nn.Dense(self.d_model,
+                          kernel_init=input_scaling(self.init_scale),
+                          name="input/embedding")(inputs)
+        outputs, activation_stats = super().__call__(
+            inputs, is_training=is_training)
+#        outputs = jnp.mean(outputs, axis=1)
+        outputs = outputs[:, 0, :]
+        outputs = nn.Dense(1, 
+                kernel_init=mup_output_scaling, name="output/unembedding")(outputs)
+        return jnp.squeeze(outputs), activation_stats
+
+
 param_labels = {
-    "params": {
-        "input/embedding": "input",
-        "input/positional_embeddings": "input",
-        "transformer": "hidden",
-        "output/unembedding": "output",
-    }
+    "input/embedding": "input",
+    "input/positional_embeddings": "input",
+    "transformer": "hidden",
+    "output/unembedding": "output",
 }
 
 

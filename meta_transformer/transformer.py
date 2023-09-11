@@ -1,6 +1,7 @@
 from typing import Optional
 import flax.linen as nn
 import jax
+import jax.numpy as jnp
 import chex
 from meta_transformer.attention import SelfAttention
 from meta_transformer.utils import get_activation_stats
@@ -51,7 +52,7 @@ class TransformerBlock(nn.Module):
         activations["residual_pre_attention"] = get_activation_stats(residual)
 
         x = nn.LayerNorm()(x)
-        x, acts = self.self_attention(x, mask=mask)  # can include mask=mask argument here
+        x, acts = self.self_attention(x, mask=mask)
         activations["attention"] = acts
         activations["attention_out"] = get_activation_stats(x)
         x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=not is_training)
@@ -81,6 +82,7 @@ class Transformer(nn.Module):
     attn_factor: float = 1.0
     init_scale: Optional[float] = 1.0
     name: Optional[str] = None
+    causal_masking: Optional[bool] = False
 
     @nn.compact
     def __call__(
@@ -89,7 +91,8 @@ class Transformer(nn.Module):
         is_training: bool = True,
     ) -> jax.Array:
         """Transforms input embedding sequences to output embedding sequences."""
-        chex.assert_shape(x, (None, None, self.d_model))
+        chex.assert_shape(x, (None, None, self.d_model))  # batch, seq, dim
+        mask = nn.make_causal_mask(x) if self.causal_masking else None
         activations = {}
 
         for layer in range(self.num_layers):
@@ -100,7 +103,7 @@ class Transformer(nn.Module):
                 widening_factor=self.widening_factor,
                 attn_factor=self.attn_factor,
                 init_scale=self.init_scale,
-            )(x, is_training=is_training)
+            )(x, mask=mask, is_training=is_training)
             activations[f"layer_{layer}"] = acts
 
         return nn.LayerNorm()(x), activations

@@ -1,3 +1,4 @@
+import numpy as np
 import jax
 from jax import random, jit, value_and_grad
 import jax.numpy as jnp
@@ -9,7 +10,7 @@ from jax.typing import ArrayLike
 import wandb
 import flax.linen as nn
 from meta_transformer import utils
-from meta_transformer.data import ParamsData
+from meta_transformer.data import ParamsArrSingle
 from meta_transformer.logger_config import setup_logger
 logger = setup_logger(__name__)
 
@@ -40,19 +41,22 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
         return out, aux
 
     @functools.partial(jit, static_argnums=0)
-    def init_train_state(self, rng: ArrayLike, data: ParamsData) -> dict:
+    def init_train_state(self, rng: ArrayLike, data: ParamsArrSingle) -> dict:
         out_rng, subkey = jax.random.split(rng)
-        params = self.model.init(subkey, data.backdoored, is_training=False)
-        opt_state = self.opt.init(params)
+        v = self.model.init(subkey, data.params, is_training=False)  # TODO hardcoded to detection (change to 'inputs'?)
+        opt_state = self.opt.init(v["params"])
+        if list(v.keys()) != ["params"]:
+            raise ValueError("Expected model.init to return a dict with "
+                f"a single key 'params'. Instead got {v.keys()}.")
         return TrainState(
             step=0,
             rng=out_rng,
             opt_state=opt_state,
-            params=params,
+            params=v["params"],
         )
     
     @functools.partial(jit, static_argnums=0)
-    def update(self, state: TrainState, data: ParamsData) -> (TrainState, dict):
+    def update(self, state: TrainState, data: ParamsArrSingle) -> (TrainState, dict):
         state.rng, subkey = jax.random.split(state.rng)
         (loss, aux), grads = value_and_grad(self.loss_fn, has_aux=True)(
                 state.params, subkey, data)
@@ -64,7 +68,7 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
                 "step": state.step,
                 "grad_norm": optax.global_norm(grads),
                 "weight_norm": optax.global_norm(state.params),
-                "diff_to_input": jnp.mean((data.backdoored - aux["outputs"])**2)
+#                "diff_to_input": jnp.mean((data.backdoored - aux["outputs"])**2)  # TODO hardcoded to detection
         }
         if "metrics" in aux:
             metrics.update({f"train/{k}": v for k, v in aux["metrics"].items()})
@@ -90,43 +94,52 @@ def print_metrics(metrics: Mapping[str, Any], prefix: str = ""):
     output = prefix
     output += f"Step: {metrics['step']}, Epoch: {metrics['epoch']}, "
     other_metrics = [k for k in metrics if k not in ["step", "epoch"]]
-    output += ", ".join([f"{k}: {metrics[k]:.2f}" for k in other_metrics])
+    output += ", ".join([f"{k}: {metrics[k]:.4f}" for k in other_metrics])
     logger.info(output)
 
 
 @chex.dataclass
 class Logger:
-    log_interval: int = 5
-    store: bool = False
-
     def __post_init__(self):
-        self.data = []
-
-    def clean(self, metrics: dict) -> dict:
-        metrics = {k: v.item() if isinstance(v, jnp.ndarray) else v
-                for k, v in metrics.items()}
-        return metrics
-
-    def log(self,
-            state: TrainState,
-            metrics: dict,
-            force_log: Optional[bool] = False,
-            verbose=True):
-        if state.step % self.log_interval == 0 or force_log:
-            metrics = self.clean(metrics)
-            if verbose:
-                print_metrics(metrics)
-            wandb.log(metrics, step=state.step)
-            if self.store:
-                self.log_append(state, metrics)
+        self.train_metrics = []
+        self.val_metrics = []
     
-    def log_append(self, 
-                   state: TrainState,
-                   metrics: dict):
-        metrics['step'] = int(state.step)
-        self.data.append(metrics)
+    def flush_mean(self, state, status="train", verbose=True, 
+                   extra_metrics=None):
+        metrics = self.train_metrics if status == "train" else self.val_metrics
+
+        # reduce
+        means = {}
+        for k in metrics[0].keys():
+            means[k] = np.mean([d[k] for d in metrics])
+            means[k] = np.round(means[k].item(), 5)
+        means["step"] = int(state.step)
+        if extra_metrics is not None:
+            means.update(extra_metrics)
+        
+        # log
+        wandb.log(means, step=state.step)
+        if verbose:
+            print_metrics(means)
+        
+        # reset
+        if status == "train":
+            self.train_metrics = []
+        elif status == "val":
+            self.val_metrics = []
+        else:
+            raise ValueError(f"Unknown status {status}.")
+
+    def write(self, state, metrics, status="train"):
+        metrics["step"] = int(state.step)
+        if status == "train":
+            self.train_metrics.append(metrics)
+        elif status == "val":
+            self.val_metrics.append(metrics)
+        else:
+            raise ValueError(f"Unknown status {status}.")
     
-    def get_data(self, metric="train/loss"):
+    def get_metrics(self, metric="train/loss"):
         """returns a tuple (steps, metric)"""
-        return zip(*[(d['step'], d[metric]) for d in self.data if metric in d])
+        return zip(*[(d['step'], d[metric]) for d in self.train_metrics if metric in d])
 

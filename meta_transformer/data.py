@@ -1,5 +1,5 @@
 from functools import partial
-from jax import jit
+import jax.numpy as jnp
 from jax.typing import ArrayLike
 from typing import Tuple, Iterator, List
 import numpy as np
@@ -16,8 +16,34 @@ import json
 checkpointer = orbax.checkpoint.PyTreeCheckpointer()
 
 
+@flax.struct.dataclass
+class ParamsArrSingle:
+    params: ArrayLike
+    label: {0, 1}
+
+    def __len__(self):
+        return len(self.label)
+    
+    def __getitem__(self, i):
+        return ParamsArrSingle(self.params[i], self.label[i])
+
+
+@flax.struct.dataclass
+class ParamsTreeSingle:
+    params: Sequence[dict] | dict
+    label: Sequence[int] | int
+
+    def __len__(self):
+        assert len(self.params) == len(self.label), \
+                     "Inputs and targets must be the same length."
+        return len(self.label)
+    
+    def __getitem__(self, i):
+        return ParamsTreeSingle(self.params[i], self.label[i])
+
+
 @flax.struct.dataclass  # TODO: replace with dataclass-array?
-class ParamsData:
+class ParamsArrPair:  # ParamsArrPairs
     """Individual datapoints or batches, in flat representation."""
     backdoored: ArrayLike
     clean: ArrayLike
@@ -29,11 +55,11 @@ class ParamsData:
         return len(self.clean)
     
     def __getitem__(self, i):
-        return ParamsData(self.backdoored[i], self.clean[i], self.target_label[i])
+        return ParamsArrPair(self.backdoored[i], self.clean[i], self.target_label[i])
 
 
 @flax.struct.dataclass
-class ParamsDataTree:
+class ParamsTreePair:
     """Individual datapoints or batches, in pytree representation."""
     backdoored: Sequence[dict] | dict
     clean: Sequence[dict] | dict
@@ -43,7 +69,20 @@ class ParamsDataTree:
         return len(self.clean)
     
     def __getitem__(self, i):
-        return ParamsDataTree(self.backdoored[i], self.clean[i], self.info[i])
+        return ParamsTreePair(self.backdoored[i], self.clean[i], self.info[i])
+
+def load_model(idx: int, dir: str) -> (dict, dict[str]):
+    """Load a model from a directory."""
+    path = Path(dir) / str(idx) / 'params'
+    info = json.loads((Path(dir) / str(idx) / 'info.json').read_text())
+    return checkpointer.restore(path), info
+
+
+def load_models(idxs: Sequence[int], dir: str, max_workers: int = 1):
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        out = executor.map(partial(load_model, dir=dir), idxs)
+    models, info = [list(x) for x in zip(*out)]
+    return models, info
 
 
 def load_pair_of_models(idx: int, backdoored_dir: str, clean_dir: str
@@ -63,7 +102,7 @@ def load_clean_and_backdoored(
         backdoored_dir: str,
         clean_dir: str,
         max_workers: int = 1,
-        ) -> ParamsDataTree:
+        ) -> ParamsTreePair:
     """Load a batch of pairs of models from two different directories."""
     def load_pair(idx):
         return load_pair_of_models(idx, backdoored_dir, clean_dir)
@@ -72,14 +111,14 @@ def load_clean_and_backdoored(
         loaded_models = executor.map(load_pair, range(num_pairs))
     
     backdoored, clean, info = [list(x) for x in zip(*loaded_models)]
-    return ParamsDataTree(backdoored, clean, info=info)
+    return ParamsTreePair(backdoored, clean, info=info)
 
 
 def data_iterator(
-        data: ParamsDataTree,
+        data: ParamsTreePair,
         batchsize: int = 1024, 
         skip_last: bool = False,
-        ) -> Iterator[ParamsDataTree]:
+        ) -> Iterator[ParamsTreePair]:
     """Iterate over the data in batches."""
     n = len(data)
     for i in range(0, n, batchsize):
@@ -99,7 +138,7 @@ def reached_last_batch(n, i, batchsize, skip_last):
 
 
 def data_cycler(
-        data: ParamsDataTree,
+        data: ParamsTreePair,
         batchsize: int = 1024, 
         skip_last: bool = False,
         ) -> Iterator[Tuple[ArrayLike, ArrayLike]]:
@@ -115,13 +154,13 @@ def data_cycler(
         yield data[i:i + batchsize], epoch_done
 
 
-def split_data(data: ParamsDataTree, val_data_ratio: float = 0.1):
+def split_data(data: ParamsTreePair, val_data_ratio: float = 0.1):
     split_index = int(len(data)*(1-val_data_ratio))
     return data[:split_index], data[split_index:]
 
 
 def flatten_and_chunk_batch(
-        batch: ParamsDataTree,
+        batch: ParamsTreePair,
         chunk_size: int,
         data_std: float,
         ):
@@ -130,7 +169,7 @@ def flatten_and_chunk_batch(
     proc = preprocessing.flatten_and_chunk_list
     b, inverse = proc(batch.backdoored, chunk_size, data_std)
     c, inverse = proc(batch.clean, chunk_size, data_std)
-    return ParamsData(
+    return ParamsArrPair(
         backdoored=b,
         clean=c,
         target_label=np.array([x['target_label'] for x in batch.info]),
@@ -146,24 +185,25 @@ def augment_list_of_params(params: List[dict],
 
 
 def augment_batch(
-        batch: ParamsDataTree, 
+        batch: ParamsTreePair, 
         rng: np.random.Generator,
         layers_to_permute: list,
     ) -> dict:
     """Augment a batch of nets with permutation augmentations."""
-    c = utils.clone_numpy_rng
-    return ParamsDataTree(
-        augment_list_of_params(batch.backdoored, c(rng), layers_to_permute),
-        augment_list_of_params(batch.clean, c(rng), layers_to_permute),
+    rngs = utils.numpy_rng_clones(rng, 2)
+    return ParamsTreePair(
+        augment_list_of_params(batch.backdoored, rngs[0], layers_to_permute),
+        augment_list_of_params(batch.clean, rngs[1], layers_to_permute),
         info=batch.info,
     )
 
 
 
-class DataLoader:
+
+class BaseDataLoader:
     def __init__(
             self,
-            data: ParamsDataTree,
+            data,
             batch_size: int,
             data_std: float,
             rng: np.random.Generator = None, 
@@ -187,11 +227,7 @@ class DataLoader:
         self.len = len(self.data) // self.batch_size + (not self.skip_last_batch)
 
     def process_batch(self, batch):
-        if self.augment:
-            batch = augment_batch(
-                batch, self.rng, self.layers_to_permute)
-        return flatten_and_chunk_batch(
-            batch, self.chunk_size, self.data_std)[0]
+        raise NotImplementedError
     
     def init_data_iterator(self):
         return data_iterator(
@@ -213,13 +249,46 @@ class DataLoader:
     def __len__(self):
         return len(self.data) // self.batch_size + (not self.skip_last_batch)
 
-    def shuffle(self):
-        """Shuffle without creating a copy."""
-        clone = utils.clone_numpy_rng(self.rng)
-        self.rng.shuffle(self.data.backdoored)
-        clone.shuffle(self.data.clean)
-        del clone
 
+class DataLoaderSingle(BaseDataLoader):
+    def process_batch(self, batch):
+        if self.augment:
+            params = augment_list_of_params(
+                batch.params, self.rng, self.layers_to_permute)
+        else:
+            params = batch.params
+
+        flat_params, inverse = preprocessing.flatten_and_chunk_list(
+            params, self.chunk_size, self.data_std)
+        
+        return ParamsArrSingle(
+            params=flat_params,
+            label=jnp.array(batch.label)
+        )
+
+    def shuffle(self):
+        perm = self.rng.permutation(len(self.data))
+        self.data = ParamsTreeSingle(
+            params=[self.data.params[i] for i in perm],
+            label=[self.data.label[i] for i in perm],
+        )
+
+class DataLoaderPair(BaseDataLoader):
+    def process_batch(self, batch):
+        if self.augment:
+            batch = augment_batch(
+                batch, self.rng, self.layers_to_permute)
+        return flatten_and_chunk_batch(
+            batch, self.chunk_size, self.data_std)[0]
+
+    def shuffle(self):
+        perm = self.rng.permutation(len(self.data))
+        return ParamsTreePair(
+            backdoored=[self.data.backdoored[i] for i in perm],
+            clean=[self.data.clean[i] for i in perm],
+            info=[self.data.info[i] for i in perm],
+        )
+    
 
 #        else:
 #            with concurrent.futures.ProcessPoolExecutor(max_workers=self.max_workers) as executor:  # >2x faster than ThreadPool

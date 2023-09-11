@@ -1,6 +1,5 @@
 from time import time
 import os
-from pathlib import Path
 import pprint
 
 import jax
@@ -17,9 +16,9 @@ import orbax.checkpoint
 from etils import epath
 
 from meta_transformer import utils, preprocessing, module_path, on_cluster, output_dir, interactive, data
-from meta_transformer.meta_model import MetaModel, mup_adamw
+from meta_transformer.meta_model import MetaModelClassifier, mup_adamw
 from meta_transformer.train import Updater, Logger
-from meta_transformer.data import split_data, ParamsArrPair
+from meta_transformer.data import split_data, ParamsArrSingle, ParamsTreeSingle
 from meta_transformer.logger_config import setup_logger
 
 import backdoors.utils
@@ -38,33 +37,26 @@ INTERACTIVE = interactive
 LAYERS_TO_PERMUTE = ["Conv_0", "Conv_1", "Conv_2", "Conv_3", "Conv_4", "Conv_5"]
 
 
-def loss_from_outputs(outputs: ArrayLike, targets: ArrayLike) -> float:
-    """MSE between flattened trees"""
-    return jnp.mean((outputs - targets)**2)
-
-
 def create_loss_fn(model_forward: callable):
-    """
-    - model_forward: computes forward fn, e.g. model.apply for flax / haiku.
-    """
     def loss_fn(
             params: dict,
             rng: ArrayLike,
-            data: data.ParamsArrSingle,
+            data: ParamsArrSingle,
             is_training: bool = True
         ):
-        outputs, activation_stats = model_forward(
-            params, 
-            data.backdoored, 
+        logit, activation_stats = model_forward(
+            {"params": params},
+            data.params, 
             is_training=is_training,
             rngs={"dropout": rng},
         )
-        loss = loss_from_outputs(outputs, data.clean)
-        metrics = {f"activation_stats/{k}": v 
-                   for k, v in activation_stats.items()}
-        metrics = utils.flatten_dict(metrics, sep=".")  # max 1 level dict
-        #aux = dict(outputs=outputs, metrics=metrics)
-        aux = dict(outputs=outputs)  # model output before MSE computation
+        loss = optax.sigmoid_binary_cross_entropy(logit, data.label).mean()
+        metrics = {}
+        metrics["accuracy"] = jnp.mean((logit > 0) == data.label)
+        #metrics = {f"activation_stats/{k}": v 
+        #           for k, v in activation_stats.items()}
+        #metrics = utils.flatten_dict(metrics, sep=".")  # max 1 level dict
+        aux = dict(outputs=logit, metrics=metrics)
         return loss, aux
     return loss_fn
 
@@ -81,18 +73,16 @@ if __name__ == "__main__":
 
     parser.add_argument('--chunk_size', type=int, default=256)
     parser.add_argument('--d_model', type=int, default=256)
-    parser.add_argument('--use_embedding', type=bool, default=True)
     parser.add_argument('--adam_b1', type=float, default=0.1)
     parser.add_argument('--adam_b2', type=float, default=0.001)
     parser.add_argument('--adam_eps', type=float, default=1e-8)
-    parser.add_argument('--dropout_rate', type=float, default=0.05)
+    parser.add_argument('--dropout_rate', type=float, default=0.00)
 
     parser.add_argument('--max_runtime', type=int, help='Max runtime in minutes', default=np.inf)
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--dataset', type=str, default='mnist')
     parser.add_argument('--ndata', type=int, help='Number of data points',
                         default=23_710)
-    parser.add_argument('--validate_output', action='store_true', help='Validate depoisoning')
     parser.add_argument('--save_checkpoint', action='store_true', 
             help='Save checkpoint at the end of training')
 
@@ -121,28 +111,49 @@ if __name__ == "__main__":
     # Load model checkpoints
     logger.info("Loading data...")
     poison_type = args.poison_type
-    dataset = data.load_clean_and_backdoored(
-        num_pairs=args.ndata,
-        backdoored_dir=paths.SECONDARY_BACKDOOR / args.poison_type,
-        clean_dir=paths.PRIMARY_CLEAN,
-        max_workers=None if on_cluster else 1,
+    poisoned_models, poisoned_info = data.load_models(
+        idxs=range(args.ndata),
+        dir=paths.SECONDARY_BACKDOOR / args.poison_type,
+        max_workers=1,
     )
-    logger.info("Data loading done.")
+    clean_models, clean_info = data.load_models(
+        idxs=range(args.ndata),
+        dir=paths.PRIMARY_CLEAN,
+        max_workers=1,
+    )
 
     # split into train and val
-    train_data, val_data = split_data(dataset, VAL_DATA_RATIO)
+    train_pois, val_pois = split_data(poisoned_models, VAL_DATA_RATIO)
+    train_clean, val_clean = split_data(clean_models, VAL_DATA_RATIO)
+
+    train_data = ParamsTreeSingle(
+        params=train_pois + train_clean,
+        label=[1] * len(train_pois) + [0] * len(train_clean),
+    )
+    perm = np_rng.permutation(len(train_data))
+    train_data = ParamsTreeSingle(
+        params=[train_data.params[i] for i in perm],
+        label=[train_data.label[i] for i in perm],
+    )
+
+    val_data = ParamsTreeSingle(
+        params=val_pois + val_clean,
+        label=[1] * len(val_pois) + [0] * len(val_clean),
+    )
+    
+    logger.info("Data loading done.")
 
     with jax.default_device(jax.devices("cpu")[0]):
-        weights_std = jax.flatten_util.ravel_pytree(train_data.backdoored[:100])[0].std()
+        weights_std = jax.flatten_util.ravel_pytree(train_data.params[:100])[0].std()
 
 
     # Meta-Model Initialization
-    model = MetaModel(
+    model = MetaModelClassifier(
         d_model=args.d_model,
         num_heads=max(1, int(args.d_model / 64)),
         num_layers=args.num_layers if args.num_layers is not None else int(args.d_model / 42),
         dropout_rate=args.dropout_rate,
-        use_embedding=args.use_embedding,
+        use_embedding=False,
         in_factor=args.in_factor,
         out_factor=args.out_factor,
         init_scale=args.init_scale,
@@ -178,52 +189,22 @@ if __name__ == "__main__":
         decay_amount = jnp.minimum(step // decay_steps, 5)  # decay 5 times max
         return args.lr * decay_factor**decay_amount
     
-    opt = optimizer(lr=schedule, wd=args.wd, clip_value=0.2)
+    opt = optimizer(lr=schedule, wd=args.wd, clip_value=5.)
     loss_fn = create_loss_fn(model.apply)
     updater = Updater(opt=opt, model=model, loss_fn=loss_fn)
-    train_logger = Logger()
+    metrics_logger = Logger()
     rng, subkey = jax.random.split(rng)
 
     # initial data (and get unflatten_fn)
     inputs_init, unchunk_and_unflatten = preprocessing.flatten_and_chunk_list(
-        train_data.backdoored[:2], chunk_size=args.chunk_size, data_std=weights_std)
-    dummy_batch = ParamsArrPair(inputs_init, jnp.ones(inputs_init.shape), target_label=0)
+        train_data.params[:2], chunk_size=args.chunk_size, data_std=weights_std)
+    dummy_batch = ParamsArrSingle(params=inputs_init, label=0)
     state = updater.init_train_state(subkey, dummy_batch)
-
-
-    if args.validate_output:
-        assert args.dataset.lower() == "cifar10"
-        cifar10_test = backdoors.data.load_cifar10(split="test")
-        cifar10_poisoned = backdoors.poison.filter_and_poison_all(
-            cifar10_test, target_label=range(10), poison_type=args.poison_type)
-
-
-    def validate_base(carry, params_and_target: (ParamsArrPair, int)):
-        """Validate reconstructed base model."""
-        base_params, target_label = params_and_target
-        acc = backdoors.train.accuracy_from_params(base_params, cifar10_test)
-        attack_success_rate = backdoors.train.accuracy_from_params(
-            base_params, cifar10_poisoned[target_label])
-
-        metrics = dict(
-            accuracy=acc,
-            attack_success_rate=attack_success_rate,
-        )
-        carry = None  # dummy carry for lax.scan (could be vmap but not enough memory)
-        return carry, {"out/" + k: v for k, v in metrics.items()}
-
-
-    @jax.jit
-    def get_reconstruction_metrics(meta_model_outputs, target_labels):
-        base_params = jax.vmap(unchunk_and_unflatten)(meta_model_outputs)  # dict of seqs of params
-        _, out_metrics = jax.lax.scan(
-            validate_base, None, (base_params, target_labels))
-        return {k: v.mean() for k, v in out_metrics.items()}
 
 
     wandb.init(
         mode="online" if args.use_wandb else "disabled",
-        project=f"depoison-{args.dataset}",
+        project=f"detect-backdoors-{args.dataset}",
         tags=args.tags,
         notes=args.notes,
         config={
@@ -255,12 +236,12 @@ if __name__ == "__main__":
     logger.info(f"Steps per epoch: {steps_per_epoch}")
     logger.info(f"Total number of steps: {steps_per_epoch * args.epochs}")
     logger.info(f"Number of parameters in meta-model: {utils.count_params(state.params) / 1e6} Million")
-    logger.info(f"Number of chunks per base model: {len(dummy_batch.backdoored[0])}")
-    logger.info(f"Chunk size: {len(dummy_batch.backdoored[0][0])}")
+    logger.info(f"Number of chunks per base model: {len(dummy_batch.params[0])}")
+    logger.info(f"Chunk size: {len(dummy_batch.params[0][0])}")
     # logger.info("Number of parameter per base model:")
 
 
-    train_loader = data.DataLoaderPairs(train_data,
+    train_loader = data.DataLoaderSingle(train_data,
                                 batch_size=args.bs,
                                 rng=np_rng,
                                 max_workers=None,
@@ -271,7 +252,7 @@ if __name__ == "__main__":
                                 data_std=weights_std,
                                 )
 
-    val_loader = data.DataLoaderPairs(val_data,
+    val_loader = data.DataLoaderSingle(val_data,
                             batch_size=args.bs,
                             rng=np_rng,
                             max_workers=None,
@@ -284,36 +265,34 @@ if __name__ == "__main__":
 
     # Training loop
     disable_tqdm = not INTERACTIVE or args.disable_tqdm
-    VAL_EVERY = 2
+    VAL_EVERY = 5
     start = time()
     stop_training = False
     for epoch in range(args.epochs):
-        logger.info(f"New epoch {epoch}.")
         train_loader.shuffle()
+
 
         if epoch % VAL_EVERY == 0:  # validate every 10 epochs
             valdata = []
-            for batch in tqdm(val_loader, disable=disable_tqdm, desc="Validation"):
+            for batch in tqdm(val_loader,
+                    disable=disable_tqdm, desc="Validation"):
                 state, val_metrics, aux = updater.compute_val_metrics(
                     state, batch)
-                if args.validate_output:  # validate depoisoning
-                    rmetrics = get_reconstruction_metrics(aux["outputs"], target_labels=batch.target_label)
-                    val_metrics.update(rmetrics)
-                train_logger.write(state, val_metrics)
+                metrics_logger.write(state, val_metrics, status="val")
 
-            if len(train_logger.valdata) == 0:
+            print(len(val_metrics))
+            if len(metrics_logger.val_metrics) == 0:
                 raise ValueError("Validation data is empty.")
-
-            train_logger.flush_mean(state, status="val", 
+            metrics_logger.flush_mean(state, status="val", 
                     verbose=disable_tqdm, extra_metrics={"epoch": epoch})
             if stop_training:
                 break
 
 
         for batch in tqdm(train_loader, 
-                disable=not INTERACTIVE or args.disable_tqdm, desc="Training"):
+                disable=disable_tqdm, desc="Training"):
             state, train_metrics = updater.update(state, batch)
-            train_logger.write(state, train_metrics, status="train")
+            metrics_logger.write(state, train_metrics, status="train")
             if time() - start > args.max_runtime * 60:
                 logger.info("Maximum runtime reached. Stopping training.")
                 stop_training = True
@@ -323,8 +302,8 @@ if __name__ == "__main__":
                 logger.info("Maximum number of steps reached. Stopping training.")
                 stop_training = True
                 break
-
-        train_logger.flush_mean(state, status="train",
+        
+        metrics_logger.flush_mean(state, status="train",
                 verbose=disable_tqdm, extra_metrics={"epoch": epoch})
         
     logger.info("=======================================")

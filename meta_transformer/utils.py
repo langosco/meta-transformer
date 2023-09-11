@@ -59,3 +59,8 @@ def clone_numpy_rng(rng: np.random.Generator) -> np.random.Generator:
     new_rng = np.random.default_rng()
     new_rng.bit_generator.state = rng_state
     return new_rng
+
+
+def numpy_rng_clones(rng, num_clones=1):
+    new = rng.spawn(1)[0]
+    return [clone_numpy_rng(new) for _ in range(num_clones)]
