@@ -7,7 +7,6 @@ from typing import Tuple, Iterator, List
 import numpy as np
 from itertools import cycle
 import nnaugment
-from nnaugment.conventions import import_params, export_params
 from meta_transformer import utils, preprocessing
 import flax.struct
 from typing import Sequence
@@ -199,7 +198,8 @@ def augment_list_of_params(params: List[dict],
                            layers_to_permute: list):
     """Augment a list of nets with random augmentations"""
     return [nnaugment.random_permutation(
-        p, layers_to_permute=layers_to_permute, rng=numpy_rng) for p in params]
+        p, layers_to_permute=layers_to_permute, rng=numpy_rng, 
+        convention="flax", sort=True) for p in params]
 
 
 def augment_batch(
