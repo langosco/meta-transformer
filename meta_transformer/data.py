@@ -1,3 +1,5 @@
+import os
+import pickle
 from functools import partial
 import jax.numpy as jnp
 from jax.typing import ArrayLike
@@ -70,6 +72,22 @@ class ParamsTreePair:
     
     def __getitem__(self, i):
         return ParamsTreePair(self.backdoored[i], self.clean[i], self.info[i])
+
+
+def load_batch(filename):
+    with open(filename, 'rb') as f:
+        batch = pickle.load(f)
+    return batch
+
+
+def load_batches(datadir):
+    """Load all batches from a directory"""
+    big_batch = []
+    for entry in os.scandir(datadir):
+        if entry.name.startswith('checkpoints'):
+            big_batch.extend(load_batch(entry.path))
+    return big_batch
+
 
 def load_model(idx: int, dir: str) -> (dict, dict[str]):
     """Load a model from a directory."""
@@ -196,8 +214,6 @@ def augment_batch(
         augment_list_of_params(batch.clean, rngs[1], layers_to_permute),
         info=batch.info,
     )
-
-
 
 
 class BaseDataLoader:

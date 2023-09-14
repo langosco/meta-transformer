@@ -31,7 +31,7 @@ def shapes(net):
 
 
 @pytest.mark.parametrize("param_datapoints", [dataset])
-def test_augment(param_datapoints: data.ParamsDataTree):
+def test_augment(param_datapoints: data.ParamsTreeData):
     augmented = augment_list_of_params(
         param_datapoints,
         rng,

@@ -111,23 +111,15 @@ if __name__ == "__main__":
     # Load model checkpoints
     logger.info("Loading data...")
     poison_type = args.poison_type
-    poisoned_models, poisoned_info = data.load_models(
-        idxs=range(args.ndata),
-        dir=paths.SECONDARY_BACKDOOR / args.poison_type,
-        max_workers=1,
-    )
-    clean_models, clean_info = data.load_models(
-        idxs=range(args.ndata),
-        dir=paths.PRIMARY_CLEAN,
-        max_workers=1,
-    )
+    poisoned_data = data.load_batches(paths.PRIMARY_BACKDOOR / poison_type)
+    clean_data = data.load_batches(paths.PRIMARY_CLEAN)
 
     # split into train and val
-    train_pois, val_pois = split_data(poisoned_models, VAL_DATA_RATIO)
-    train_clean, val_clean = split_data(clean_models, VAL_DATA_RATIO)
+    train_pois, val_pois = split_data(poisoned_data, VAL_DATA_RATIO)
+    train_clean, val_clean = split_data(clean_data, VAL_DATA_RATIO)
 
     train_data = ParamsTreeSingle(
-        params=train_pois + train_clean,
+        params=[elem["params"] for elem in train_pois + train_clean],
         label=[1] * len(train_pois) + [0] * len(train_clean),
     )
     perm = np_rng.permutation(len(train_data))
@@ -137,7 +129,7 @@ if __name__ == "__main__":
     )
 
     val_data = ParamsTreeSingle(
-        params=val_pois + val_clean,
+        params=[elem["params"] for elem in val_pois + val_clean],
         label=[1] * len(val_pois) + [0] * len(val_clean),
     )
     
@@ -181,7 +173,7 @@ if __name__ == "__main__":
         )
 
 
-    decay_steps = 30000
+    decay_steps = 60000
     decay_factor = 0.6
     def schedule(step):  # decay on a log scale instead? ie every 2x steps or so
         """Decay by decay_factor every decay_steps steps."""
@@ -265,7 +257,7 @@ if __name__ == "__main__":
 
     # Training loop
     disable_tqdm = not INTERACTIVE or args.disable_tqdm
-    VAL_EVERY = 5
+    VAL_EVERY = 2
     start = time()
     stop_training = False
     for epoch in range(args.epochs):

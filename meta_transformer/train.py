@@ -107,6 +107,8 @@ class Logger:
     def flush_mean(self, state, status="train", verbose=True, 
                    extra_metrics=None):
         metrics = self.train_metrics if status == "train" else self.val_metrics
+        if len(metrics) == 0:
+            raise ValueError(f"No metrics currently logged for status={status}.")
 
         # reduce
         means = {}
