@@ -233,31 +233,31 @@ if __name__ == "__main__":
     # logger.info("Number of parameter per base model:")
 
 
-    train_loader = data.DataLoaderSingle(train_data,
+    subrng, rng = jax.random.split(rng)
+    train_loader = data.DataLoaderSingle(rng=subrng,
+                                data=train_data,
                                 batch_size=args.bs,
-                                rng=np_rng,
                                 max_workers=None,
                                 augment=args.augment,
                                 skip_last_batch=True,
                                 layers_to_permute=None if not args.augment else LAYERS_TO_PERMUTE,
                                 chunk_size=args.chunk_size,
-                                data_std=weights_std,
-                                )
+                                data_std=weights_std)
 
-    val_loader = data.DataLoaderSingle(val_data,
+    subrng, rng = jax.random.split(rng)
+    val_loader = data.DataLoaderSingle(rng=subrng,
+                            data=val_data,
                             batch_size=args.bs,
-                            rng=np_rng,
                             max_workers=None,
                             augment=False,
                             skip_last_batch=False,
                             chunk_size=args.chunk_size,
-                            data_std=weights_std,
-                            )
+                            data_std=weights_std)
 
 
     # Training loop
     disable_tqdm = not INTERACTIVE or args.disable_tqdm
-    VAL_EVERY = 2
+    VAL_EVERY = 10
     start = time()
     stop_training = False
     for epoch in range(args.epochs):

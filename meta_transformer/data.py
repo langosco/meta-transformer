@@ -1,6 +1,7 @@
 import os
 import pickle
 from functools import partial
+import jax.random
 import jax.numpy as jnp
 from jax.typing import ArrayLike
 from typing import Tuple, Iterator, List
@@ -193,25 +194,25 @@ def flatten_and_chunk_batch(
     ), inverse
 
 
-def augment_list_of_params(params: List[dict],
-                           numpy_rng: np.random.Generator,
+def augment_list_of_params(rng: jax.random.PRNGKey,
+                           params: List[dict],
                            layers_to_permute: list):
     """Augment a list of nets with random augmentations"""
+    rngs = jax.random.split(rng, len(params))
     return [nnaugment.random_permutation(
-        p, layers_to_permute=layers_to_permute, rng=numpy_rng, 
-        convention="flax", sort=True) for p in params]
+        r, p, layers_to_permute=layers_to_permute, 
+        convention="flax", sort=True) for r, p in zip(rngs, params)]
 
 
 def augment_batch(
+        rng: jax.random.PRNGKey,
         batch: ParamsTreePair, 
-        rng: np.random.Generator,
         layers_to_permute: list,
     ) -> dict:
     """Augment a batch of nets with permutation augmentations."""
-    rngs = utils.numpy_rng_clones(rng, 2)
     return ParamsTreePair(
-        augment_list_of_params(batch.backdoored, rngs[0], layers_to_permute),
-        augment_list_of_params(batch.clean, rngs[1], layers_to_permute),
+        augment_list_of_params(rng, batch.backdoored, layers_to_permute),
+        augment_list_of_params(rng, batch.clean, layers_to_permute),
         info=batch.info,
     )
 
@@ -219,20 +220,20 @@ def augment_batch(
 class BaseDataLoader:
     def __init__(
             self,
+            rng: jax.random.PRNGKey,
             data,
             batch_size: int,
             data_std: float,
-            rng: np.random.Generator = None, 
             max_workers: int = None,
             augment: bool = False,
             skip_last_batch: bool = True,
             layers_to_permute: list = None,
             chunk_size: int = 256,
         ):
+        self.rng = rng
         self.data = data
         self.batch_size = batch_size
         self.data_std = data_std
-        self.rng = rng
         self.max_workers = max_workers
         self.augment = augment
         self.skip_last_batch = skip_last_batch
@@ -257,7 +258,8 @@ class BaseDataLoader:
     
     def __next__(self):
         try:
-            return self.process_batch(next(self.batches))
+            batch, self.rng = self.process_batch(self.rng, next(self.batches))
+            return batch
         except StopIteration:
             self.batches = self.init_data_iterator()
             raise StopIteration
@@ -267,10 +269,12 @@ class BaseDataLoader:
 
 
 class DataLoaderSingle(BaseDataLoader):
-    def process_batch(self, batch):
+    @partial(jax.jit, static_argnames="self")
+    def process_batch(self, rng, batch):
+        subrng, rng = jax.random.split(rng)
         if self.augment:
-            params = augment_list_of_params(
-                batch.params, self.rng, self.layers_to_permute)
+            params = augment_list_of_params(subrng,
+                batch.params, self.layers_to_permute)
         else:
             params = batch.params
 
@@ -280,14 +284,16 @@ class DataLoaderSingle(BaseDataLoader):
         return ParamsArrSingle(
             params=flat_params,
             label=jnp.array(batch.label)
-        )
+        ), rng
 
     def shuffle(self):
-        perm = self.rng.permutation(len(self.data))
+        subrng, self.rng = jax.random.split(self.rng)
+        perm = jax.random.permutation(subrng, len(self.data))
         self.data = ParamsTreeSingle(
             params=[self.data.params[i] for i in perm],
             label=[self.data.label[i] for i in perm],
         )
+
 
 class DataLoaderPair(BaseDataLoader):
     def process_batch(self, batch):
