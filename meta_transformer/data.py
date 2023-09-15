@@ -80,12 +80,15 @@ def load_batch(filename):
     return batch
 
 
-def load_batches(datadir):
+def load_batches(datadir, max_datapoints=None):
     """Load all batches from a directory"""
     big_batch = []
     for entry in os.scandir(datadir):
         if entry.name.startswith('checkpoints'):
             big_batch.extend(load_batch(entry.path))
+        if max_datapoints is not None and len(big_batch) >= max_datapoints:
+            big_batch = big_batch[:max_datapoints]
+            break
     return big_batch
 
 
