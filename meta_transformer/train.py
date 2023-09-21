@@ -9,8 +9,7 @@ from typing import Mapping, Any, Tuple, List, Iterator, Optional
 from jax.typing import ArrayLike
 import wandb
 import flax.linen as nn
-from meta_transformer import utils
-from meta_transformer.data import ParamsArrSingle
+from meta_transformer.data import Data
 from meta_transformer.logger_config import setup_logger
 logger = setup_logger(__name__)
 
@@ -41,9 +40,9 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
         return out, aux
 
     @functools.partial(jit, static_argnums=0)
-    def init_train_state(self, rng: ArrayLike, data: ParamsArrSingle) -> dict:
+    def init_train_state(self, rng: ArrayLike, data: Data) -> dict:
         out_rng, subkey = jax.random.split(rng)
-        v = self.model.init(subkey, data.params, is_training=False)  # TODO hardcoded to detection (change to 'inputs'?)
+        v = self.model.init(subkey, data.input, is_training=False)  # TODO hardcoded to detection (change to 'inputs'?)
         opt_state = self.opt.init(v["params"])
         if list(v.keys()) != ["params"]:
             raise ValueError("Expected model.init to return a dict with "
@@ -56,7 +55,7 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
         )
     
     @functools.partial(jit, static_argnums=0)
-    def update(self, state: TrainState, data: ParamsArrSingle) -> (TrainState, dict):
+    def update(self, state: TrainState, data: Data) -> (TrainState, dict):
         state.rng, subkey = jax.random.split(state.rng)
         (loss, aux), grads = value_and_grad(self.loss_fn, has_aux=True)(
                 state.params, subkey, data)
@@ -68,7 +67,7 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
                 "step": state.step,
                 "grad_norm": optax.global_norm(grads),
                 "weight_norm": optax.global_norm(state.params),
-#                "diff_to_input": jnp.mean((data.backdoored - aux["outputs"])**2)  # TODO hardcoded to detection
+#                "diff_to_input": jnp.mean((data.target - aux["outputs"])**2)  # TODO hardcoded to detection
         }
         if "metrics" in aux:
             metrics.update({f"train/{k}": v for k, v in aux["metrics"].items()})
@@ -91,6 +90,8 @@ def print_metrics(metrics: Mapping[str, Any], prefix: str = ""):
     """Prints metrics to stdout. Assumption: metrics is a dict of scalars
     and always contains the keys "step" and "epoch".
     """
+    for k, v in metrics.items():
+        metrics[k] = np.round(v.item(), 7)
     output = prefix
     output += f"Step: {metrics['step']}, Epoch: {metrics['epoch']}, "
     other_metrics = [k for k in metrics if k not in ["step", "epoch"]]
@@ -114,8 +115,9 @@ class Logger:
         means = {}
         for k in metrics[0].keys():
             means[k] = np.mean([d[k] for d in metrics])
-            means[k] = np.round(means[k].item(), 5)
         means["step"] = int(state.step)
+
+        # update
         if extra_metrics is not None:
             means.update(extra_metrics)
         

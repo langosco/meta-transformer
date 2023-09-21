@@ -18,7 +18,7 @@ from etils import epath
 from meta_transformer import utils, preprocessing, module_path, on_cluster, output_dir, interactive, data
 from meta_transformer.meta_model import MetaModelClassifier, mup_adamw
 from meta_transformer.train import Updater, Logger
-from meta_transformer.data import split_data, ParamsArrSingle, ParamsTreeSingle
+from meta_transformer.data import Data
 from meta_transformer.logger_config import setup_logger
 
 import backdoors.utils
@@ -41,18 +41,18 @@ def create_loss_fn(model_forward: callable):
     def loss_fn(
             params: dict,
             rng: ArrayLike,
-            data: ParamsArrSingle,
+            data: Data,
             is_training: bool = True
         ):
         logit, activation_stats = model_forward(
             {"params": params},
-            data.params, 
+            data.input, 
             is_training=is_training,
             rngs={"dropout": rng},
         )
-        loss = optax.sigmoid_binary_cross_entropy(logit, data.label).mean()
+        loss = optax.sigmoid_binary_cross_entropy(logit, data.target).mean()
         metrics = {}
-        metrics["accuracy"] = jnp.mean((logit > 0) == data.label)
+        metrics["accuracy"] = jnp.mean((logit > 0) == data.target)
         #metrics = {f"activation_stats/{k}": v 
         #           for k, v in activation_stats.items()}
         #metrics = utils.flatten_dict(metrics, sep=".")  # max 1 level dict
@@ -110,33 +110,36 @@ if __name__ == "__main__":
 
     # Load model checkpoints
     logger.info("Loading data...")
-    poison_type = args.poison_type
-    poisoned_data = data.load_batches(paths.PRIMARY_BACKDOOR / poison_type)
-    clean_data = data.load_batches(paths.PRIMARY_CLEAN)
+    if args.poison_type == "all":
+        dirs = [paths.PRIMARY_BACKDOOR / x for x in ["simple_pattern", "single_pixel", "sinusoid", "strided_checkerboard"]]
+        poisoned_data = data.load_batches_from_dirs(dirs, max_datapoints_per_dir=args.ndata//8)
+        clean_data= data.load_batches(paths.PRIMARY_CLEAN, max_datapoints=args.ndata//2)
+    else:
+        poisoned_data = data.load_batches(paths.PRIMARY_BACKDOOR / args.poison_type, max_datapoints=args.ndata//2)
+        clean_data = data.load_batches(paths.PRIMARY_CLEAN, max_datapoints=args.ndata//2)
 
     # split into train and val
-    train_pois, val_pois = split_data(poisoned_data, VAL_DATA_RATIO)
-    train_clean, val_clean = split_data(clean_data, VAL_DATA_RATIO)
+    train_pois, val_pois = utils.split_data(poisoned_data, VAL_DATA_RATIO)
+    train_clean, val_clean = utils.split_data(clean_data, VAL_DATA_RATIO)
 
-    train_data = ParamsTreeSingle(
-        params=[elem["params"] for elem in train_pois + train_clean],
-        label=[1] * len(train_pois) + [0] * len(train_clean),
-    )
-    perm = np_rng.permutation(len(train_data))
-    train_data = ParamsTreeSingle(
-        params=[train_data.params[i] for i in perm],
-        label=[train_data.label[i] for i in perm],
-    )
+    with jax.default_device(jax.devices("cpu")[0]):  # keep data on cpu
+        train_data = {
+            "params": utils.tree_stack([x["params"] for x in train_pois + train_clean]),
+            "labels": jnp.array([1] * len(train_pois) + [0] * len(train_clean)),
+        }
+        subrng, rng = jax.random.split(rng)
+        perm = jax.random.permutation(subrng, utils.tree_leaves_len(train_data))
+        train_data = jax.tree_map(lambda x: x[perm], train_data)
 
-    val_data = ParamsTreeSingle(
-        params=[elem["params"] for elem in val_pois + val_clean],
-        label=[1] * len(val_pois) + [0] * len(val_clean),
-    )
-    
+        val_data = {
+            "params": utils.tree_stack([x["params"] for x in val_pois + val_clean]),
+            "labels": jnp.array([1] * len(val_pois) + [0] * len(val_clean)),
+        }
+
+        weights_mean, weights_std = utils.get_mean_and_std_of_tree(train_data["params"])
+        normalize = lambda x: (x - weights_mean) / weights_std
+
     logger.info("Data loading done.")
-
-    with jax.default_device(jax.devices("cpu")[0]):
-        weights_std = jax.flatten_util.ravel_pytree(train_data.params[:100])[0].std()
 
 
     # Meta-Model Initialization
@@ -173,7 +176,7 @@ if __name__ == "__main__":
         )
 
 
-    decay_steps = 60000
+    decay_steps = 20000
     decay_factor = 0.6
     def schedule(step):  # decay on a log scale instead? ie every 2x steps or so
         """Decay by decay_factor every decay_steps steps."""
@@ -188,9 +191,12 @@ if __name__ == "__main__":
     rng, subkey = jax.random.split(rng)
 
     # initial data (and get unflatten_fn)
-    inputs_init, unchunk_and_unflatten = preprocessing.flatten_and_chunk_list(
-        train_data.params[:2], chunk_size=args.chunk_size, data_std=weights_std)
-    dummy_batch = ParamsArrSingle(params=inputs_init, label=0)
+    chunks, unchunk = preprocessing.chunk(
+        jax.tree_map(lambda x: x[0], train_data["params"]),
+        chunk_size=args.chunk_size,
+    )
+    dummy_batch = Data(input=jnp.ones((1, *chunks.shape)),
+                       target=0)
     state = updater.init_train_state(subkey, dummy_batch)
 
 
@@ -222,37 +228,38 @@ if __name__ == "__main__":
     steps_per_epoch = len(train_data) // args.bs
 
     logger.info(f"Tags: {args.tags}")
-    logger.info(f"Number of training examples: {len(train_data)}.")
-    logger.info(f"Number of validation examples: {len(val_data)}.")
+    logger.info(f"Number of training examples: {len(train_data['labels'])}.")
+    logger.info(f"Number of validation examples: {len(val_data['labels'])}.")
     logger.info(f"Std of training data: {weights_std}. (Should be around {DATA_STD}).")
+    logger.info(f"Mean of training data: {weights_mean}. (Should be around 0).")
     logger.info(f"Steps per epoch: {steps_per_epoch}")
     logger.info(f"Total number of steps: {steps_per_epoch * args.epochs}")
     logger.info(f"Number of parameters in meta-model: {utils.count_params(state.params) / 1e6} Million")
-    logger.info(f"Number of chunks per base model: {len(dummy_batch.params[0])}")
-    logger.info(f"Chunk size: {len(dummy_batch.params[0][0])}")
-    # logger.info("Number of parameter per base model:")
+    logger.info(f"Number of chunks per base model: {len(dummy_batch.input[0])}")
+    logger.info(f"Chunk size: {args.chunk_size}")
+    # logger.info("Number of parameters per base model:")
 
+    def normalize_data(x):
+        return (x - weights_mean) / weights_std
 
     subrng, rng = jax.random.split(rng)
     train_loader = data.DataLoaderSingle(rng=subrng,
                                 data=train_data,
                                 batch_size=args.bs,
-                                max_workers=None,
                                 augment=args.augment,
                                 skip_last_batch=True,
                                 layers_to_permute=None if not args.augment else LAYERS_TO_PERMUTE,
                                 chunk_size=args.chunk_size,
-                                data_std=weights_std)
+                                normalize_fn=normalize_data)
 
     subrng, rng = jax.random.split(rng)
     val_loader = data.DataLoaderSingle(rng=subrng,
                             data=val_data,
                             batch_size=args.bs,
-                            max_workers=None,
                             augment=False,
                             skip_last_batch=False,
                             chunk_size=args.chunk_size,
-                            data_std=weights_std)
+                            normalize_fn=normalize_data)
 
 
     # Training loop
@@ -263,7 +270,6 @@ if __name__ == "__main__":
     for epoch in range(args.epochs):
         train_loader.shuffle()
 
-
         if epoch % VAL_EVERY == 0:  # validate every 10 epochs
             valdata = []
             for batch in tqdm(val_loader,
@@ -272,7 +278,6 @@ if __name__ == "__main__":
                     state, batch)
                 metrics_logger.write(state, val_metrics, status="val")
 
-            print(len(val_metrics))
             if len(metrics_logger.val_metrics) == 0:
                 raise ValueError("Validation data is empty.")
             metrics_logger.flush_mean(state, status="val", 
@@ -285,6 +290,7 @@ if __name__ == "__main__":
                 disable=disable_tqdm, desc="Training"):
             state, train_metrics = updater.update(state, batch)
             metrics_logger.write(state, train_metrics, status="train")
+
             if time() - start > args.max_runtime * 60:
                 logger.info("Maximum runtime reached. Stopping training.")
                 stop_training = True
