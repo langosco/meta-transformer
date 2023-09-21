@@ -91,7 +91,11 @@ def print_metrics(metrics: Mapping[str, Any], prefix: str = ""):
     and always contains the keys "step" and "epoch".
     """
     for k, v in metrics.items():
-        metrics[k] = np.round(v.item(), 7)
+        try:
+            metrics[k] = np.round(v.item(), 7)
+        except AttributeError:
+            metrics[k] = np.round(v, 7)
+        
     output = prefix
     output += f"Step: {metrics['step']}, Epoch: {metrics['epoch']}, "
     other_metrics = [k for k in metrics if k not in ["step", "epoch"]]
