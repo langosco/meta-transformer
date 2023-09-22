@@ -24,19 +24,19 @@ class TrainState:
 
 
 @chex.dataclass(frozen=True)  # needs to be immutable to be hashable (for static_argnums)
-class Updater: # Could also make this a function of loss_fn, model.apply, etc if we want to be flexible
+class Updater:
     """Holds training methods. All methods are jittable."""
     opt: optax.GradientTransformation
     model: nn.Module
     loss_fn: callable
 
-    # TODO this is hardcoded to val
+    @functools.partial(jit, static_argnums=0)
     def get_metrics_and_loss(self, rng, params, data):
-        """Compute acc and loss on test set."""
+        """Compute acc and loss on a test set."""
         loss, aux = self.loss_fn(params, rng, data, is_training=False)
-        out = {"val/loss": loss}
+        out = {"loss": loss}
         if "metrics" in aux:
-            out.update({f"val/{k}": v for k, v in aux["metrics"].items()})
+            out.update(aux["metrics"])
         return out, aux
 
     @functools.partial(jit, static_argnums=0)
@@ -77,12 +77,13 @@ class Updater: # Could also make this a function of loss_fn, model.apply, etc if
         state.step += 1
         return state, metrics
 
-    @functools.partial(jit, static_argnums=0)
     def compute_val_metrics(self, 
                             state: TrainState, 
-                            data: dict) -> (TrainState, dict):
+                            data: dict,
+                            name="val") -> (TrainState, dict):
         state.rng, subkey = random.split(state.rng)
         metrics, aux = self.get_metrics_and_loss(subkey, state.params, data)
+        metrics = {f"{name}/{k}": v for k, v in metrics.items()}
         return state, metrics, aux
 
 
@@ -106,14 +107,13 @@ def print_metrics(metrics: Mapping[str, Any], prefix: str = ""):
 @chex.dataclass
 class Logger:
     def __post_init__(self):
-        self.train_metrics = []
-        self.val_metrics = []
+        self.metrics = {}
     
-    def flush_mean(self, state, status="train", verbose=True, 
+    def flush_mean(self, state, name="train", verbose=True, 
                    extra_metrics=None):
-        metrics = self.train_metrics if status == "train" else self.val_metrics
+        metrics = self.metrics[name]
         if len(metrics) == 0:
-            raise ValueError(f"No metrics currently logged for status={status}.")
+            raise ValueError(f"No metrics currently logged in metrics[{name}]")
 
         # reduce
         means = {}
@@ -131,23 +131,16 @@ class Logger:
             print_metrics(means)
         
         # reset
-        if status == "train":
-            self.train_metrics = []
-        elif status == "val":
-            self.val_metrics = []
-        else:
-            raise ValueError(f"Unknown status {status}.")
+        del self.metrics[name]
 
-    def write(self, state, metrics, status="train"):
+    def write(self, state, metrics, name="train"):
         metrics["step"] = int(state.step)
-        if status == "train":
-            self.train_metrics.append(metrics)
-        elif status == "val":
-            self.val_metrics.append(metrics)
-        else:
-            raise ValueError(f"Unknown status {status}.")
+        if name not in self.metrics:
+            self.metrics[name] = []
+        self.metrics[name].append(metrics)
     
-    def get_metrics(self, metric="train/loss"):
+    def get_metrics(self, name="train", metric="train/loss"):
         """returns a tuple (steps, metric)"""
-        return zip(*[(d['step'], d[metric]) for d in self.train_metrics if metric in d])
+        metrics_list = self.metrics[name]
+        return zip(*[(d['step'], d[metric]) for d in metrics_list if metric in d])
 
