@@ -1,7 +1,6 @@
 from time import time
 import os
 import pprint
-from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -15,25 +14,20 @@ from etils import epath
 from tqdm import tqdm
 import orbax.checkpoint
 from etils import epath
-from nn_utils.schedules import add_cooldown, add_warmup
-from nn_utils import schedules
 
+from nn_utils import schedules
 from meta_transformer import utils, preprocessing, module_path, on_cluster, output_dir, interactive, data
 from meta_transformer.meta_model import MetaModelClassifier, mup_adamw
 from meta_transformer.train import Updater, Logger
 from meta_transformer.data import Data
 from meta_transformer.logger_config import setup_logger
-
 from backdoors import paths
 
 START_TIME = time()
 logger = setup_logger(__name__)
 
 
-# STD of model weights for CNNs
-DATA_STD = 0.0582  # for CIFAR-10 (mnist is 0.0586, almost exactly the same)
 VAL_DATA_RATIO = 0.1
-INTERACTIVE = interactive
 LAYERS_TO_PERMUTE = ["Conv_0", "Conv_1", "Conv_2", "Conv_3", "Conv_4", "Conv_5"]
 
 
@@ -59,6 +53,96 @@ def create_loss_fn(model_forward: callable):
         aux = dict(outputs=logit, metrics=metrics)
         return loss, aux
     return loss_fn
+
+
+def load_data(rng, poison_types, test_poison_type, ndata, bs, chunk_size, augment):
+    logger.info("Loading data...")
+    test_ood = test_poison_type != "none"
+
+    dirs = [paths.PRIMARY_BACKDOOR / x for x in poison_types]
+    test_dir = paths.PRIMARY_BACKDOOR / test_poison_type
+
+    poisoned_data = data.load_batches_from_dirs(dirs, max_datapoints_per_dir=ndata // 2 // len(dirs))
+    clean_data = data.load_batches(paths.PRIMARY_CLEAN, max_datapoints=ndata // 2)
+
+    train_pois, val_pois = utils.split_data(poisoned_data, VAL_DATA_RATIO)
+    train_clean, val_clean = utils.split_data(clean_data, VAL_DATA_RATIO)
+    
+    if test_ood:
+        test_clean = val_clean
+        test_pois = data.load_batches(test_dir, max_datapoints=len(test_clean))
+
+    with jax.default_device(jax.devices("cpu")[0]):  # keep data on cpu
+        train_data = {
+            "params": utils.tree_stack([x["params"] for x in train_pois + train_clean]),
+            "labels": jnp.array([1] * len(train_pois) + [0] * len(train_clean)),
+        }
+        subrng, rng = jax.random.split(rng)
+        perm = jax.random.permutation(subrng, utils.tree_leaves_len(train_data))
+        train_data = jax.tree_map(lambda x: x[perm], train_data)
+
+        val_data = {
+            "params": utils.tree_stack([x["params"] for x in val_pois + val_clean]),
+            "labels": jnp.array([1] * len(val_pois) + [0] * len(val_clean)),
+        }
+        if test_ood:
+            ood_test_data = {
+                "params": utils.tree_stack([x["params"] for x in test_pois + test_clean]),
+                "labels": jnp.array([1] * len(test_pois) + [0] * len(test_clean)),
+            }
+
+        weights_mean, weights_std = utils.get_mean_and_std_of_tree(train_data["params"])
+        normalize = lambda x: (x - weights_mean) / weights_std
+
+    logger.info("Data loading done.")
+    if not len(train_pois) == len(train_clean):
+        logger.warning("Number of poisoned and clean training examples is not equal."
+            f"Poisoned: {len(train_pois)}, clean: {len(train_clean)}")
+        raise
+    if not len(val_pois) == len(val_clean):
+        logger.warning("Number of poisoned and clean validation examples is not equal."
+            f"Poisoned: {len(val_pois)}, clean: {len(val_clean)}")
+        raise
+    if test_ood and not len(test_pois) == len(test_clean):
+        logger.warning("Number of poisoned and clean test examples is not equal."
+            f"Poisoned: {len(test_pois)}, clean: {len(test_clean)}")
+        raise
+
+    def normalize_data(x):
+        return (x - weights_mean) / weights_std
+
+    subrng, rng = jax.random.split(rng)
+    train_loader = data.DataLoaderSingle(rng=subrng,
+                                data=train_data,
+                                batch_size=bs,
+                                augment=augment,
+                                skip_last_batch=True,
+                                layers_to_permute=None if not augment else LAYERS_TO_PERMUTE,
+                                chunk_size=chunk_size,
+                                normalize_fn=normalize_data)
+
+    subrng, rng = jax.random.split(rng)
+    val_loader = data.DataLoaderSingle(rng=subrng,
+                            data=val_data,
+                            batch_size=bs,
+                            augment=False,
+                            skip_last_batch=False,
+                            chunk_size=chunk_size,
+                            normalize_fn=normalize_data)
+
+    subrng, rng = jax.random.split(rng)
+
+    if test_ood:
+        test_loader = data.DataLoaderSingle(rng=subrng,
+                                data=ood_test_data,
+                                batch_size=bs,
+                                augment=False,
+                                skip_last_batch=False,
+                                chunk_size=chunk_size,
+                                normalize_fn=normalize_data)
+
+
+    return train_loader, val_loader, test_loader if test_ood else None
 
 
 def main():
@@ -91,9 +175,10 @@ def main():
     parser.add_argument('--tags', nargs='*', type=str, default=[])
     parser.add_argument('--notes', type=str, default=None, help="wandb notes")
 
+    parser.add_argument('--poison_types', nargs='*', type=str, default=["simple_pattern"])
+    parser.add_argument('--test_poison_type', type=str, default='none')
 #    parser.add_argument('--num_heads', type=int, help='Number of heads', default=16)
     parser.add_argument('--num_layers', type=int, help='Number of layers', default=None)
-    parser.add_argument('--poison_types', nargs='*', type=str, default=["simple_pattern"])
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--disable_tqdm', action='store_true')
     parser.add_argument('--augment', action='store_true', help="Augment base models via permutations")
@@ -106,59 +191,14 @@ def main():
     logger.info("Args:\n%s", pprint.pformat(vars(args)))
 
     rng = jax.random.PRNGKey(args.seed)
-    np_rng = np.random.default_rng(args.seed+42)
 
-    # Load model checkpoints
-    logger.info("Loading data...")
-    dirs = [paths.PRIMARY_BACKDOOR / x for x in args.poison_types]
-    poisoned_data = data.load_batches_from_dirs(dirs, max_datapoints_per_dir=args.ndata // 2 // len(dirs))
-    clean_data = data.load_batches(paths.PRIMARY_CLEAN, max_datapoints=args.ndata // 2)
-
-    train_pois, val_pois = utils.split_data(poisoned_data, VAL_DATA_RATIO)
-    train_clean, val_clean = utils.split_data(clean_data, VAL_DATA_RATIO)
-    
-    TEST_POISON_TYPE = "simple_pattern"  # train on single_pixel and strided_checkerboard
-    TEST_DIR = paths.PRIMARY_BACKDOOR / TEST_POISON_TYPE
-    test_clean, test_pois = val_clean, data.load_batches(TEST_DIR, max_datapoints=len(val_clean))
-
-    with jax.default_device(jax.devices("cpu")[0]):  # keep data on cpu
-        train_data = {
-            "params": utils.tree_stack([x["params"] for x in train_pois + train_clean]),
-            "labels": jnp.array([1] * len(train_pois) + [0] * len(train_clean)),
-        }
-        subrng, rng = jax.random.split(rng)
-        perm = jax.random.permutation(subrng, utils.tree_leaves_len(train_data))
-        train_data = jax.tree_map(lambda x: x[perm], train_data)
-
-        val_data = {
-            "params": utils.tree_stack([x["params"] for x in val_pois + val_clean]),
-            "labels": jnp.array([1] * len(val_pois) + [0] * len(val_clean)),
-        }
-
-        ood_test_data = {
-            "params": utils.tree_stack([x["params"] for x in test_pois + test_clean]),
-            "labels": jnp.array([1] * len(test_pois) + [0] * len(test_clean)),
-        }
-
-        weights_mean, weights_std = utils.get_mean_and_std_of_tree(train_data["params"])
-        normalize = lambda x: (x - weights_mean) / weights_std
-
-    logger.info("Data loading done.")
-    if not len(train_pois) == len(train_clean):
-        logger.warning("Number of poisoned and clean training examples is not equal."
-            f"Poisoned: {len(train_pois)}, clean: {len(train_clean)}")
-        raise
-    if not len(val_pois) == len(val_clean):
-        logger.warning("Number of poisoned and clean validation examples is not equal."
-            f"Poisoned: {len(val_pois)}, clean: {len(val_clean)}")
-        raise
-    if not len(test_pois) == len(test_clean):
-        logger.warning("Number of poisoned and clean test examples is not equal."
-            f"Poisoned: {len(test_pois)}, clean: {len(test_clean)}")
-        raise
+    # Load base model checkpoints
+    train_loader, val_loader, test_loader = load_data(
+        rng, args.poison_types, args.test_poison_type, args.ndata,
+        args.bs, args.chunk_size, args.augment)
 
 
-    # Meta-Model Initialization
+    # Meta-model initialization
     model = MetaModelClassifier(
         d_model=args.d_model,
         num_heads=max(1, int(args.d_model / 64)),
@@ -191,26 +231,27 @@ def main():
             opt,
         )
 
-    schedule = schedules.constant_with_warmup_and_cooldown(
-        args.lr,
-        args.nsteps, 
-        warmup_length=args.nsteps//4, 
-        cooldown_start=int(args.nsteps*0.9), 
-        max_lr=args.lr*20
-    )
+#    schedule = schedules.constant_with_warmup_and_cooldown(
+#        args.lr,
+#        args.nsteps, 
+#        warmup_length=args.nsteps//4, 
+#        cooldown_start=int(args.nsteps*0.9), 
+#        max_lr=args.lr*20
+#    )
+    schedule = lambda x: args.lr
     opt = optimizer(lr=schedule, wd=args.wd, clip_value=5.)
     loss_fn = create_loss_fn(model.apply)
     updater = Updater(opt=opt, model=model, loss_fn=loss_fn)
     metrics_logger = Logger()
-    rng, subkey = jax.random.split(rng)
 
-    # initial data (and get unflatten_fn)
-    chunks, unchunk = preprocessing.chunk(
-        jax.tree_map(lambda x: x[0], train_data["params"]),
+    # initialize
+    chunks, _ = preprocessing.chunk(
+        jax.tree_map(lambda x: x[0], train_loader.data["params"]),
         chunk_size=args.chunk_size,
     )
     dummy_batch = Data(input=jnp.ones((1, *chunks.shape)),
                        target=0)
+    rng, subkey = jax.random.split(rng)
     state = updater.init_train_state(subkey, dummy_batch)
 
 
@@ -239,51 +280,15 @@ def main():
         )  
     
 
-    steps_per_epoch = len(train_data) // args.bs
-
     logger.info(f"Tags: {args.tags}")
-    logger.info(f"Number of training examples: {len(train_data['labels'])}.")
-    logger.info(f"Number of validation examples: {len(val_data['labels'])}.")
-    logger.info(f"Std of training data: {weights_std}. (Should be around {DATA_STD}).")
-    logger.info(f"Mean of training data: {weights_mean}. (Should be around 0).")
-    logger.info(f"Steps per epoch: {steps_per_epoch}")
-    logger.info(f"Total number of steps: {steps_per_epoch * args.max_epochs}")
+    logger.info(f"Number of training examples: {len(train_loader.data['labels'])}.")
+    logger.info(f"Number of validation examples: {len(val_loader.data['labels'])}.")
+    logger.info(f"Total number of steps: {args.nsteps}")
+    logger.info(f"Steps per epoch: {train_loader.len}")
     logger.info(f"Number of parameters in meta-model: {utils.count_params(state.params) / 1e6} Million")
     logger.info(f"Number of chunks per base model: {len(dummy_batch.input[0])}")
     logger.info(f"Chunk size: {args.chunk_size}")
     # logger.info("Number of parameters per base model:")
-
-    def normalize_data(x):
-        return (x - weights_mean) / weights_std
-
-    subrng, rng = jax.random.split(rng)
-    train_loader = data.DataLoaderSingle(rng=subrng,
-                                data=train_data,
-                                batch_size=args.bs,
-                                augment=args.augment,
-                                skip_last_batch=True,
-                                layers_to_permute=None if not args.augment else LAYERS_TO_PERMUTE,
-                                chunk_size=args.chunk_size,
-                                normalize_fn=normalize_data)
-
-    subrng, rng = jax.random.split(rng)
-    val_loader = data.DataLoaderSingle(rng=subrng,
-                            data=val_data,
-                            batch_size=args.bs,
-                            augment=False,
-                            skip_last_batch=False,
-                            chunk_size=args.chunk_size,
-                            normalize_fn=normalize_data)
-
-    subrng, rng = jax.random.split(rng)
-    test_loader = None
-#    test_loader = data.DataLoaderSingle(rng=subrng,
-#                            data=ood_test_data,
-#                            batch_size=args.bs,
-#                            augment=False,
-#                            skip_last_batch=False,
-#                            chunk_size=args.chunk_size,
-#                            normalize_fn=normalize_data)
 
 
     # Training loop
@@ -305,7 +310,7 @@ def main():
 
     # - updater
     # - metrics_logger
-    disable_tqdm = not INTERACTIVE or args.disable_tqdm
+    disable_tqdm = not interactive or args.disable_tqdm
     VAL_EVERY = 10
     start = time()
     stop_training = False
@@ -314,7 +319,7 @@ def main():
 
         if epoch % VAL_EVERY == 0:
             for batch in tqdm(val_loader, disable=disable_tqdm, desc="Validation"):
-                state, val_metrics, aux = updater.compute_val_metrics(state, batch)
+                state, val_metrics, _ = updater.compute_val_metrics(state, batch)
                 metrics_logger.write(state, val_metrics, name="val")
 
             metrics_logger.flush_mean(state, name="val", 
@@ -322,8 +327,8 @@ def main():
 
             if test_loader is not None:
                 for batch in test_loader:
-                    state, val_metrics, aux = updater.compute_val_metrics(
-                        state, batch, name=f"{TEST_POISON_TYPE}")
+                    state, val_metrics, _ = updater.compute_val_metrics(
+                        state, batch, name="ood_test")
                     metrics_logger.write(state, val_metrics, name=f"ood_test")
                 metrics_logger.flush_mean(state, name=f"ood_test", 
                         verbose=disable_tqdm, extra_metrics={"epoch": epoch})
@@ -356,7 +361,6 @@ def main():
 
     # save checkpoint when training is done
     if args.save_checkpoint:
-        CHECKPOINTS_DIR = epath.Path(module_path) / "experiments/checkpoints"
         checkpointer = orbax.checkpoint.PyTreeCheckpointer()
 
         logger.info("Saving checkpoint...")
