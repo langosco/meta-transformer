@@ -90,6 +90,7 @@ class MetaModel(nn.Module):
 class MetaModelClassifier(MetaModel):
     """Binary classifier with scalar output."""
     use_embedding: bool = False
+    num_classes: int = 1
 
     @nn.compact
     def __call__(
@@ -105,7 +106,7 @@ class MetaModelClassifier(MetaModel):
             inputs, is_training=is_training)
 #        outputs = jnp.mean(outputs, axis=1)
         outputs = outputs[:, 0, :]
-        outputs = nn.Dense(1, 
+        outputs = nn.Dense(self.num_classes,
                 kernel_init=mup_output_scaling, name="output/unembedding")(outputs)
         return jnp.squeeze(outputs), activation_stats
 
