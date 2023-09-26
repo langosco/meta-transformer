@@ -46,6 +46,20 @@ hyperparameters = {"dataset": ["MNIST", "CIFAR-10", "SVHN", "Fashion-MNIST"],
 num_classes = len(hyperparameters[HYPERPARAMETER]) if HYPERPARAMETER != 'lr' else 1
 
 
+def load_raw_data(num_nets):
+    packs_to_check = num_nets // PACK_SIZE + 1
+    data = np.array([])
+    labels = np.array([])
+    for i in range(packs_to_check):
+        with np.load(f'/rds/project/rds-eWkDxBhxBrQ/neel/ctc/packed_nets_{i*PACK_SIZE}_{(i+1)*PACK_SIZE}.npz', allow_pickle=True) as pack:
+            data = np.concatenate((data, pack['nets']))
+            labels = np.concatenate((labels, pack['labels']))
+    data = data[:num_nets]
+    labels = labels[:num_nets]
+    # Not normalized, still includes nans
+    return Data(input=data, target=labels)
+
+
 def lazy_index(i):
     # Nothing about lazy computation, I'm just really lazy.
     if i < 43772:
@@ -58,28 +72,28 @@ def lazy_index(i):
         return i - 3
 
 
-def load_data():
-    l = lazy_index(DATA_LEN - 1) + 1
-    data = np.zeros((l, MAX_NET_LEN), dtype=np.float32)
+def load_data(num_nets, net_len, target_hp):
+    l = lazy_index(num_nets - 1) + 1
+    data = np.zeros((l, net_len), dtype=np.float32)
     labels = []
-    for i in range(DATA_LEN):
+    for i in range(num_nets):
         if i == 43772 or i == 44155 or i == 44038:
             continue
         print(i, end="\r")
-        net = np.load(f'/rds/user/sma92/hpc-work/ctc/{i}/epoch_20.npy', allow_pickle=True).item()
+        net = np.load(f'/rds/project/rds-eWkDxBhxBrQ/neel/ctc/{i}/epoch_20.npy', allow_pickle=True).item()
         flat_net, _ = jax.flatten_util.ravel_pytree(net)
-        if MAX_NET_LEN > 0:
+        if net_len > 0:
             # Truncate
             # TODO: Put whichever params are most important first (e.g. skip batchnorms?)
-            flat_net = flat_net[:MAX_NET_LEN]
+            flat_net = flat_net[:net_len]
         # Pad
-        padded_net = jnp.pad(flat_net, (0, MAX_NET_LEN - len(flat_net)))
+        padded_net = jnp.pad(flat_net, (0, net_len - len(flat_net)))
         clean_net = jnp.nan_to_num(padded_net)
         data[lazy_index(i)] = np.array(clean_net)
         
-        with open(f'/rds/user/sma92/hpc-work/ctc/{i}/run_data.json', 'rb') as f:
+        with open(f'/rds/project/rds-eWkDxBhxBrQ/neel/ctc/{i}/run_data.json', 'rb') as f:
             run_file = json.load(f)
-            labels.append(run_file['hyperparameters'][HYPERPARAMETER])
+            labels.append(run_file['hyperparameters'][target_hp])
 
     data_sample = data[:10000]
     mean = data_sample.mean()
@@ -89,7 +103,7 @@ def load_data():
     data = data.reshape(len(data), CHUNK_SIZE, -1)
 
     if HYPERPARAMETER != "lr":
-        labels = [hyperparameters[HYPERPARAMETER].index(l) for l in labels]
+        labels = [hyperparameters[target_hp].index(l) for l in labels]
         labels = jax.nn.one_hot(jnp.array(labels), num_classes)
     else:
         labels = [float(l) for l in labels]
@@ -150,6 +164,10 @@ def main():
     parser.add_argument('--tags', nargs='*', type=str, default=[])
     parser.add_argument('--notes', type=str, default=None, help="wandb notes")
 
+    parser.add_argument('--num_nets', type=int, default=100_000)
+    parser.add_argument('--net_len', type=int, default=800_000)
+    parser.add_argument('--target_hp', type=str, default='optimizer')
+
 #    parser.add_argument('--num_heads', type=int, help='Number of heads', default=16)
     parser.add_argument('--num_layers', type=int, help='Number of layers', default=None)
     parser.add_argument('--seed', type=int, default=42)
@@ -164,7 +182,7 @@ def main():
     rng = jax.random.PRNGKey(args.seed)
 
     # Load base model checkpoints
-    train_data, val_data = utils.split_data(load_data(), VAL_DATA_RATIO)
+    train_data, val_data = utils.split_data(load_data(args.num_nets, args.net_len, args.target_hp), VAL_DATA_RATIO)
 
     train_loader = data.data_iterator(train_data, batchsize=args.bs)
     val_loader = data.data_iterator(val_data, batchsize=args.bs)
