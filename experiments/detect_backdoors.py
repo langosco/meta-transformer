@@ -253,8 +253,7 @@ def main():
         jax.tree_map(lambda x: x[0], train_loader.data["params"]),
         chunk_size=args.chunk_size,
     )
-    dummy_batch = Data(input=jnp.ones((1, *chunks.shape)),
-                       target=0)
+    dummy_batch = jnp.ones((1, *chunks.shape))
     rng, subkey = jax.random.split(rng)
     state = updater.init_train_state(subkey, dummy_batch)
 

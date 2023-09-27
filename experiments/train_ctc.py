@@ -18,10 +18,10 @@ import nnaugment
 from etils import epath
 
 from nn_utils import schedules
-from meta_transformer import utils, preprocessing, module_path, on_cluster, output_dir, interactive, data
+from meta_transformer import utils, preprocessing, module_path, on_cluster, output_dir, interactive
 from meta_transformer.meta_model import MetaModelClassifier, mup_adamw
 from meta_transformer.train import Updater, Logger
-from meta_transformer.data import Data
+from meta_transformer.data import Data, data_iterator
 from meta_transformer.logger_config import setup_logger
 
 START_TIME = time()
@@ -36,6 +36,10 @@ CHUNK_SIZE = 128
 DATA_LEN = 100000
 MAX_NET_LEN = 800000
 HYPERPARAMETER = 'optimizer'
+#DATA_DIR = '/rds/project/rds-eWkDxBhxBrQ/neel/ctc'
+DATA_DIR = '/home/lauro/projects/meta-models/neel-nninn/data/ctc_new'
+LAYERS_TO_PERMUTE = ["Conv_0", "Conv_1", "Conv_2"]
+
 
 hyperparameters = {"dataset": ["MNIST", "CIFAR-10", "SVHN", "Fashion-MNIST"],
                    "batch_size": [32, 64, 128, 256],
@@ -47,12 +51,12 @@ hyperparameters = {"dataset": ["MNIST", "CIFAR-10", "SVHN", "Fashion-MNIST"],
 num_classes = len(hyperparameters[HYPERPARAMETER]) if HYPERPARAMETER != 'lr' else 1
 
 
-def load_raw_data(num_nets):
+def load_raw_data(num_nets, PACK_SIZE=1000):
     packs_to_check = num_nets // PACK_SIZE + 1
     data = np.array([])
     labels = np.array([])
     for i in range(packs_to_check):
-        with np.load(f'/rds/project/rds-eWkDxBhxBrQ/neel/ctc/packed_nets_{i*PACK_SIZE}_{(i+1)*PACK_SIZE}.npz', allow_pickle=True) as pack:
+        with np.load(DATA_DIR + f'/packed_nets_{i*PACK_SIZE}_{(i+1)*PACK_SIZE}.npz', allow_pickle=True) as pack:
             data = np.concatenate((data, pack['nets']))
             labels = np.concatenate((labels, pack['labels']))
     data = data[:num_nets]
@@ -74,42 +78,63 @@ def lazy_index(i):
 
 
 def load_data(num_nets, net_len, target_hp):
-    l = lazy_index(num_nets - 1) + 1
-    data = np.zeros((l, net_len), dtype=np.float32)
+#    l = lazy_index(num_nets - 1) + 1
+#    data = np.zeros((l, net_len), dtype=np.float32)
+    nets = []
     labels = []
     for i in range(num_nets):
         if i == 43772 or i == 44155 or i == 44038:
             continue
         print(i, end="\r")
-        net = np.load(f'/rds/project/rds-eWkDxBhxBrQ/neel/ctc/{i}/epoch_20.npy', allow_pickle=True).item()
-        flat_net, _ = jax.flatten_util.ravel_pytree(net)
-        if net_len > 0:
-            # Truncate
-            # TODO: Put whichever params are most important first (e.g. skip batchnorms?)
-            flat_net = flat_net[:net_len]
-        # Pad
-        padded_net = jnp.pad(flat_net, (0, net_len - len(flat_net)))
-        clean_net = jnp.nan_to_num(padded_net)
-        data[lazy_index(i)] = np.array(clean_net)
-        
-        with open(f'/rds/project/rds-eWkDxBhxBrQ/neel/ctc/{i}/run_data.json', 'rb') as f:
+        net = np.load(DATA_DIR + f"/{i}/epoch_20.npy", allow_pickle=True).item()
+        nets.append(net)
+
+        with open(DATA_DIR + f'/{i}/run_data.json', 'rb') as f:
             run_file = json.load(f)
             labels.append(run_file['hyperparameters'][target_hp])
-
-    data_sample = data[:10000]
-    mean = data_sample.mean()
-    std = data_sample.std()
-
-    data = (data - mean) / std
-    data = data.reshape(len(data), CHUNK_SIZE, -1)
 
     if HYPERPARAMETER != "lr":
         labels = [hyperparameters[target_hp].index(l) for l in labels]
         labels = jax.nn.one_hot(jnp.array(labels), num_classes)
     else:
         labels = [float(l) for l in labels]
+    return Data(input=nets, target=labels)
 
-    return Data(input=data, target=labels)
+
+def mean_and_std(nets):
+    flat = jax.flatten_util.ravel_pytree(nets)[0]
+    flat = jnp.nan_to_num(flat)
+    return flat.mean(), flat.std()
+
+
+#        flat_net, _ = jax.flatten_util.ravel_pytree(net)
+#        if net_len > 0:
+#            # Truncate
+#            # TODO: Put whichever params are most important first (e.g. skip batchnorms?)
+#            flat_net = flat_net[:net_len]
+#        # Pad
+#        padded_net = jnp.pad(flat_net, (0, net_len - len(flat_net)))
+#        clean_net = jnp.nan_to_num(padded_net)
+#        data[lazy_index(i)] = np.array(clean_net)
+#        
+#        with open(DATA_DIR + f'/{i}/run_data.json', 'rb') as f:
+#            run_file = json.load(f)
+#            labels.append(run_file['hyperparameters'][target_hp])
+#
+#    data_sample = data[:10000]
+#    mean = data_sample.mean()
+#    std = data_sample.std()
+#
+#    data = (data - mean) / std
+#    data = data.reshape(len(data), CHUNK_SIZE, -1)
+#
+#    if HYPERPARAMETER != "lr":
+#        labels = [hyperparameters[target_hp].index(l) for l in labels]
+#        labels = jax.nn.one_hot(jnp.array(labels), num_classes)
+#    else:
+#        labels = [float(l) for l in labels]
+#
+#    return Data(input=data, target=labels)
 
 
 def create_loss_fn(model_forward: callable):
@@ -165,7 +190,7 @@ def main():
     parser.add_argument('--tags', nargs='*', type=str, default=[])
     parser.add_argument('--notes', type=str, default=None, help="wandb notes")
 
-    parser.add_argument('--num_nets', type=int, default=100_000)
+    parser.add_argument('--num_nets', type=int, default=10_000)
     parser.add_argument('--net_len', type=int, default=800_000)
     parser.add_argument('--target_hp', type=str, default='optimizer')
 
@@ -183,10 +208,48 @@ def main():
     rng = jax.random.PRNGKey(args.seed)
 
     # Load base model checkpoints
-    train_data, val_data = utils.split_data(load_data(args.num_nets, args.net_len, args.target_hp), VAL_DATA_RATIO)
+    with jax.default_device(jax.devices('cpu')[0]):
+        train_data, val_data = utils.split_data(load_data(args.num_nets, args.net_len, args.target_hp), VAL_DATA_RATIO)
+        data_mean, data_std = mean_and_std(train_data.input[:10])
 
-    train_loader = data.data_iterator(train_data, batchsize=args.bs)
-    val_loader = data.data_iterator(val_data, batchsize=args.bs)
+
+    def normalize(x):
+        return (x - data_mean) / data_std
+
+
+    def process_single_sample(rng, params: dict):
+        """Augment, flatten, truncate, and chunk."""
+        if args.augment:
+            c = [k for k in params.keys() if "Conv" in k]
+            d = [k for k in params.keys() if "Dense" in k]
+            del d[-1]
+            to_augment = c + d
+            params = nnaugment.sort_layers(params)
+            params = nnaugment.import_params(params, from_naming_scheme="haiku")
+            params = nnaugment.random_permutation(rng, params, 
+                    layers_to_permute=to_augment, sort=True)
+        flat, _ = jax.flatten_util.ravel_pytree(params)
+        flat = flat[:MAX_NET_LEN]
+        flat = jnp.pad(flat, (0, MAX_NET_LEN - len(flat)))
+        flat = jnp.nan_to_num(flat)
+        flat = normalize(flat)
+        return flat.reshape(CHUNK_SIZE, -1)
+
+
+    def process_batch(rng, params: list[dict]):
+        subrngs = jax.random.split(rng, len(params))
+        params = [process_single_sample(subrng, param)
+                for subrng, param in zip(subrngs, params)]
+        return jnp.stack(params)
+
+
+    def batches(rng, data: Data):
+        with jax.default_device(jax.devices('cpu')[0]):
+            for batch in data_iterator(data, batchsize=args.bs):
+                rng, subrng = jax.random.split(rng)
+                yield Data(input=process_batch(subrng, batch.input),
+                        target=batch.target)
+
    
     # Meta-model initialization
     model = MetaModelClassifier(
@@ -237,7 +300,8 @@ def main():
 
     # initialize
     rng, subkey = jax.random.split(rng)
-    state = updater.init_train_state(subkey, train_data[:2])
+    state = updater.init_train_state(
+        subkey, process_batch(subkey, train_data.input[:2]))
 
 
     wandb.init(
@@ -270,32 +334,14 @@ def main():
     logger.info(f"Chunk size: {args.chunk_size}")
     # logger.info("Number of parameters per base model:")
 
-
-    def process_single_sample(rng, params):
-        """Augment, flatten, truncate, and chunk."""
-        nnaugment.random_permutation(rng, params, 
-            layers_to_permute=LAYERS_TO_PERMUTE, sort=True)
-        flat, _ = jax.flatten_util.ravel_pytree(params)
-        flat = flat[:MAX_NET_LEN]
-        flat = jnp.pad(flat, (0, MAX_NET_LEN - len(flat)))
-        flat = jnp.nan_to_num(flat)
-        return flat.reshape(CHUNK_SIZE, -1)
-
-
-    def process_batch(rng, params):
-        subrngs = jax.random.split(rng, len(params))
-        return [process_single_sample(subrng, param)
-                for subrng, param in zip(subrngs, params)]
-        
-
-
     disable_tqdm = not interactive or args.disable_tqdm
     VAL_EVERY = 10
     start = time()
     stop_training = False
     for epoch in range(args.max_epochs):
         if epoch % VAL_EVERY == 0:
-            for batch in tqdm(val_loader, disable=disable_tqdm, desc="Validation"):
+            subrng, rng = jax.random.split(rng)
+            for batch in batches(subrng, val_data):
                 state, val_metrics, _ = updater.compute_val_metrics(state, batch)
                 metrics_logger.write(state, val_metrics, name="val")
 
@@ -305,7 +351,8 @@ def main():
             if stop_training:
                 break
 
-        for batch in tqdm(train_loader, 
+        subrng, rng = jax.random.split(rng)
+        for batch in tqdm(batches(subrng, train_data), 
                 disable=disable_tqdm, desc="Training"):
             state, train_metrics = updater.update(state, batch)
             metrics_logger.write(state, train_metrics, name="train")
@@ -323,9 +370,7 @@ def main():
         metrics_logger.flush_mean(state, name="train",
                 verbose=disable_tqdm, extra_metrics={"epoch": epoch})
         
-        train_loader = data.data_iterator(train_data, batchsize=args.bs)
-        val_loader = data.data_iterator(val_data, batchsize=args.bs)
-    
+
     logger.info("=======================================")
     logger.info("Completed.")
     logger.info(f"Total time elapsed since start: {round(time() - START_TIME)} seconds.")

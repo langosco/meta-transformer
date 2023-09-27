@@ -39,10 +39,9 @@ class Updater:
             out.update(aux["metrics"])
         return out, aux
 
-    @functools.partial(jit, static_argnums=0)
-    def init_train_state(self, rng: ArrayLike, data: Data) -> dict:
+    def init_train_state(self, rng: ArrayLike, inputs: ArrayLike) -> dict:
         out_rng, subkey = jax.random.split(rng)
-        v = self.model.init(subkey, data.input, is_training=False)  # TODO hardcoded to detection (change to 'inputs'?)
+        v = self.model.init(subkey, inputs, is_training=False)
         opt_state = self.opt.init(v["params"])
         if list(v.keys()) != ["params"]:
             raise ValueError("Expected model.init to return a dict with "
