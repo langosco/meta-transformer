@@ -239,8 +239,8 @@ def main():
         args.lr,
         args.nsteps, 
         warmup_length=args.nsteps//4, 
-        cooldown_start=int(args.nsteps*0.8), 
-        max_lr=args.lr*2,
+        cooldown_start=int(args.nsteps*0.75), 
+        max_lr=args.lr*5,
     )
 #    schedule = lambda x: args.lr
     opt = optimizer(lr=schedule, wd=args.wd, clip_value=25.)
