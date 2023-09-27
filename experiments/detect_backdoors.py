@@ -289,7 +289,7 @@ def main():
     logger.info(f"Total number of steps: {args.nsteps}")
     logger.info(f"Steps per epoch: {train_loader.len}")
     logger.info(f"Number of parameters in meta-model: {utils.count_params(state.params) / 1e6} Million")
-    logger.info(f"Number of chunks per base model: {len(dummy_batch.input[0])}")
+    logger.info(f"Number of chunks per base model: {len(dummy_batch[0])}")
     logger.info(f"Chunk size: {args.chunk_size}")
     # logger.info("Number of parameters per base model:")
 
