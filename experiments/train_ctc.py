@@ -51,7 +51,7 @@ hyperparameters = {"dataset": ["MNIST", "CIFAR-10", "SVHN", "Fashion-MNIST"],
 num_classes = len(hyperparameters[HYPERPARAMETER]) if HYPERPARAMETER != 'lr' else 1
 
 
-def load_raw_data(num_nets, PACK_SIZE=1000):
+def load_data_batched(num_nets, PACK_SIZE=1000):
     packs_to_check = num_nets // PACK_SIZE + 1
     data = np.array([])
     labels = np.array([])
@@ -209,7 +209,7 @@ def main():
 
     # Load base model checkpoints
     with jax.default_device(jax.devices('cpu')[0]):
-        train_data, val_data = utils.split_data(load_data(args.num_nets, args.net_len, args.target_hp), VAL_DATA_RATIO)
+        train_data, val_data = utils.split_data(load_data_batched(args.num_nets, args.net_len, args.target_hp), VAL_DATA_RATIO)
         data_mean, data_std = mean_and_std(train_data.input[:10])
 
 
