@@ -29,16 +29,16 @@ logger = setup_logger(__name__)
 
 
 VAL_DATA_RATIO = 0.1
-# LAYERS_TO_PERMUTE = ["Conv_0", "Conv_1", "Conv_2", "Conv_3", "Conv_4", "Conv_5"]
 
 
 CHUNK_SIZE = 128
 DATA_LEN = 100000
 MAX_NET_LEN = 800000
 HYPERPARAMETER = 'optimizer'
-#DATA_DIR = '/rds/project/rds-eWkDxBhxBrQ/neel/ctc'
-DATA_DIR = '/home/lauro/projects/meta-models/neel-nninn/data/ctc_new'
-LAYERS_TO_PERMUTE = ["Conv_0", "Conv_1", "Conv_2"]
+if on_cluster:
+    DATA_DIR = '/rds/project/rds-eWkDxBhxBrQ/neel/ctc_new'
+else:
+    DATA_DIR = '/home/lauro/projects/meta-models/neel-nninn/data/ctc_new'
 
 
 hyperparameters = {"dataset": ["MNIST", "CIFAR-10", "SVHN", "Fashion-MNIST"],
@@ -335,7 +335,7 @@ def main():
     # logger.info("Number of parameters per base model:")
 
     disable_tqdm = not interactive or args.disable_tqdm
-    VAL_EVERY = 10
+    VAL_EVERY = 3
     start = time()
     stop_training = False
     for epoch in range(args.max_epochs):
