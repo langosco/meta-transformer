@@ -50,18 +50,21 @@ hyperparameters = {"dataset": ["MNIST", "CIFAR-10", "SVHN", "Fashion-MNIST"],
 
 num_classes = len(hyperparameters[HYPERPARAMETER]) if HYPERPARAMETER != 'lr' else 1
 
+PACK_SIZE = 1000
 
-def load_data_batched(num_nets, PACK_SIZE=1000):
+def load_data_batched(num_nets, target_hp):
     packs_to_check = num_nets // PACK_SIZE + 1
-    data = np.array([])
-    labels = np.array([])
+    data = []
+    labels = []
     for i in range(packs_to_check):
         with np.load(DATA_DIR + f'/packed_nets_{i*PACK_SIZE}_{(i+1)*PACK_SIZE}.npz', allow_pickle=True) as pack:
-            data = np.concatenate((data, pack['nets']))
-            labels = np.concatenate((labels, pack['labels']))
-    data = data[:num_nets]
-    labels = labels[:num_nets]
-    # Not normalized, still includes nans
+            data += pack['nets']
+            labels += [d[target_hp] for d in pack['labels']]
+
+    data = np.array(data[:num_nets])
+    labels = np.array(labels[:num_nets])
+    labels = jax.nn.one_hot(lables, num_classes)
+
     return Data(input=data, target=labels)
 
 
@@ -93,7 +96,7 @@ def load_data(num_nets, net_len, target_hp):
             run_file = json.load(f)
             labels.append(run_file['hyperparameters'][target_hp])
 
-    if HYPERPARAMETER != "lr":
+    if target_hp != "lr":
         labels = [hyperparameters[target_hp].index(l) for l in labels]
         labels = jax.nn.one_hot(jnp.array(labels), num_classes)
     else:
