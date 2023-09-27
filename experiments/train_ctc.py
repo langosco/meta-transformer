@@ -227,7 +227,7 @@ def main():
             params = nnaugment.sort_layers(params)
             params = nnaugment.import_params(params, from_naming_scheme="haiku")
             params = nnaugment.random_permutation(rng, params, 
-                    layers_to_permute=to_augment, sort=True)
+                    layers_to_permute=to_augment)
         flat, _ = jax.flatten_util.ravel_pytree(params)
         flat = flat[:MAX_NET_LEN]
         flat = jnp.pad(flat, (0, MAX_NET_LEN - len(flat)))
