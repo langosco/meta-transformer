@@ -14,6 +14,7 @@ import argparse
 from etils import epath
 from tqdm import tqdm
 import orbax.checkpoint
+import nnaugment
 from etils import epath
 
 from nn_utils import schedules
@@ -252,25 +253,24 @@ def main():
     # logger.info("Number of parameters per base model:")
 
 
-    # Training loop
+    def process_single_sample(rng, params):
+        """Augment, flatten, truncate, and chunk."""
+        nnaugment.random_permutation(rng, params, 
+            layers_to_permute=LAYERS_TO_PERMUTE, sort=True)
+        flat, _ = jax.flatten_util.ravel_pytree(params)
+        flat = flat[:MAX_NET_LEN]
+        flat = jnp.pad(flat, (0, MAX_NET_LEN - len(flat)))
+        flat = jnp.nan_to_num(flat)
+        return flat.reshape(CHUNK_SIZE, -1)
 
-    # write fn with training loop logic?
-    # args:
-    # - initial state
-    # - train_loader
-    # - val_loader
 
-    # - max_epochs
-    # - max_runtime
-    # - max_steps
+    def process_batch(rng, params):
+        subrngs = jax.random.split(rng, len(params))
+        return [process_single_sample(subrng, param)
+                for subrng, param in zip(subrngs, params)]
+        
 
-    # - VAL_EVERY
-    # - disable_tqdm
-    # - save_checkpoint
-    # - checkpoint_dir
 
-    # - updater
-    # - metrics_logger
     disable_tqdm = not interactive or args.disable_tqdm
     VAL_EVERY = 10
     start = time()
