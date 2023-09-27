@@ -63,7 +63,7 @@ def load_data(rng, poison_types, test_poison_type, ndata, bs, chunk_size, augmen
     test_dir = paths.PRIMARY_BACKDOOR / test_poison_type
 
     poisoned_data = data.load_batches_from_dirs(dirs, max_datapoints_per_dir=ndata // 2 // len(dirs))
-    clean_data = data.load_batches(paths.PRIMARY_CLEAN, max_datapoints=ndata // 2)
+    clean_data = data.load_batches(paths.PRIMARY_CLEAN / "clean_1", max_datapoints=ndata // 2)
 
     train_pois, val_pois = utils.split_data(poisoned_data, VAL_DATA_RATIO)
     train_clean, val_clean = utils.split_data(clean_data, VAL_DATA_RATIO)
@@ -140,9 +140,10 @@ def load_data(rng, poison_types, test_poison_type, ndata, bs, chunk_size, augmen
                                 skip_last_batch=False,
                                 chunk_size=chunk_size,
                                 normalize_fn=normalize_data)
+    else:
+        test_loader = None
 
-
-    return train_loader, val_loader, test_loader if test_ood else None
+    return train_loader, val_loader, test_loader
 
 
 def main():
@@ -231,15 +232,15 @@ def main():
             opt,
         )
 
-#    schedule = schedules.constant_with_warmup_and_cooldown(
-#        args.lr,
-#        args.nsteps, 
-#        warmup_length=args.nsteps//4, 
-#        cooldown_start=int(args.nsteps*0.9), 
-#        max_lr=args.lr*20
-#    )
-    schedule = lambda x: args.lr
-    opt = optimizer(lr=schedule, wd=args.wd, clip_value=5.)
+    schedule = schedules.constant_with_warmup_and_cooldown(
+        args.lr,
+        args.nsteps, 
+        warmup_length=args.nsteps//4, 
+        cooldown_start=int(args.nsteps*0.9), 
+        max_lr=args.lr*20
+    )
+#    schedule = lambda x: args.lr
+    opt = optimizer(lr=schedule, wd=args.wd, clip_value=25.)
     loss_fn = create_loss_fn(model.apply)
     updater = Updater(opt=opt, model=model, loss_fn=loss_fn)
     metrics_logger = Logger()

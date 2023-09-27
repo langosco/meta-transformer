@@ -45,7 +45,7 @@ def load_batches_from_dirs(dirs, max_datapoints_per_dir=None):
     big_batch = []
     for datadir in dirs:
         big_batch.extend(load_batches(datadir, max_datapoints_per_dir))
-    random.shuffle(big_batch)
+    random.shuffle(big_batch)  # shuffle so in val split all types are present
     return big_batch
 
 
