@@ -1,6 +1,7 @@
 from time import time
 import os
 import pprint
+import json
 
 import jax
 import jax.numpy as jnp
@@ -92,7 +93,6 @@ def load_data(rng, poison_types, test_poison_type, ndata, bs, chunk_size, augmen
             }
 
         weights_mean, weights_std = utils.get_mean_and_std_of_tree(train_data["params"])
-        normalize = lambda x: (x - weights_mean) / weights_std
 
     logger.info("Data loading done.")
     if not len(train_pois) == len(train_clean):
@@ -107,6 +107,9 @@ def load_data(rng, poison_types, test_poison_type, ndata, bs, chunk_size, augmen
         logger.warning("Number of poisoned and clean test examples is not equal."
             f"Poisoned: {len(test_pois)}, clean: {len(test_clean)}")
         raise
+
+    logger.info(f"Mean of weights: {weights_mean}")
+    logger.info(f"Std of weights: {weights_std}")
 
     def normalize_data(x):
         return (x - weights_mean) / weights_std
@@ -365,9 +368,21 @@ def main():
         checkpointer = orbax.checkpoint.PyTreeCheckpointer()
 
         logger.info("Saving checkpoint...")
-        savedir = epath.Path(output_dir) / "mm-checkpoints/checkpoints" \
-            / args.dataset / f"run_{int(time())}"
-        checkpointer.save(savedir, state.params)
+        savedir = epath.Path(output_dir) / "mm-checkpoints" \
+            / "--".join(args.poison_types)
+        checkpointer.save(savedir / f"run_{int(time())}", state.params)
+
+        model_config = {k: v for k, v in vars(model).items() 
+                        if not k.startswith("_")}
+        info = {
+            'model_config': model_config,
+            'chunk_size': args.chunk_size,
+            'ndata': args.ndata,
+            'nsteps': args.nsteps,
+        }
+        with open(savedir / "info.json", "w") as f:
+            json.dump(info, f, indent=4)
+
         logger.info(f"Checkpoint saved to {savedir}.")
 
 
