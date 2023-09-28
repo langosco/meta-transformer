@@ -243,6 +243,7 @@ def main():
         max_lr=args.lr*5,
     )
 #    schedule = lambda x: args.lr
+#    schedule = schedules.triangle_schedule(max_lr=args.lr, total_steps=args.nsteps)
     opt = optimizer(lr=schedule, wd=args.wd, clip_value=25.)
     loss_fn = create_loss_fn(model.apply)
     updater = Updater(opt=opt, model=model, loss_fn=loss_fn)
@@ -257,6 +258,8 @@ def main():
     rng, subkey = jax.random.split(rng)
     state = updater.init_train_state(subkey, dummy_batch)
 
+    checkpoint_savedir = epath.Path(output_dir) / "mm-checkpoints" \
+        / "--".join(args.poison_types)
 
     wandb.init(
         mode="online" if args.use_wandb else "disabled",
@@ -279,6 +282,7 @@ def main():
             "slurm_job_id": os.environ.get('SLURM_JOB_ID'),
             "slurm_job_name": os.environ.get('SLURM_JOB_NAME'),
             "augment": args.augment,
+            "save_checkpoint": args.save_checkpoint,
         },
         )  
     
@@ -291,6 +295,8 @@ def main():
     logger.info(f"Number of parameters in meta-model: {utils.count_params(state.params) / 1e6} Million")
     logger.info(f"Number of chunks per base model: {len(dummy_batch[0])}")
     logger.info(f"Chunk size: {args.chunk_size}")
+    if args.save_checkpoint:
+        logger.info(f"Saving final checkpoint to {checkpoint_savedir}.")
     # logger.info("Number of parameters per base model:")
 
 
@@ -367,9 +373,7 @@ def main():
         checkpointer = orbax.checkpoint.PyTreeCheckpointer()
 
         logger.info("Saving checkpoint...")
-        savedir = epath.Path(output_dir) / "mm-checkpoints" \
-            / "--".join(args.poison_types)
-        checkpointer.save(savedir / f"run_{int(time())}", state.params)
+        checkpointer.save(checkpoint_savedir / f"run_{int(time())}", state.params)
 
         model_config = {k: v for k, v in vars(model).items() 
                         if not k.startswith("_")}
@@ -379,10 +383,10 @@ def main():
             'ndata': args.ndata,
             'nsteps': args.nsteps,
         }
-        with open(savedir / "info.json", "w") as f:
+        with open(checkpoint_savedir / "info.json", "w") as f:
             json.dump(info, f, indent=4)
 
-        logger.info(f"Checkpoint saved to {savedir}.")
+        logger.info(f"Checkpoint saved to {checkpoint_savedir}.")
 
 
 if __name__ == "__main__":
