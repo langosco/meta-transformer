@@ -238,9 +238,9 @@ def main():
     schedule = schedules.constant_with_warmup_and_cooldown(
         args.lr,
         args.nsteps, 
-        warmup_length=args.nsteps//4, 
+        warmup_length=args.nsteps//5, 
         cooldown_start=int(args.nsteps*0.75), 
-        max_lr=args.lr*5,
+        max_lr=args.lr*4,
     )
 #    schedule = lambda x: args.lr
 #    schedule = schedules.triangle_schedule(max_lr=args.lr, total_steps=args.nsteps)
