@@ -169,9 +169,9 @@ def main():
     parser.add_argument('--nsteps', type=int, default=100_000)
     parser.add_argument('--max_runtime', type=int, help='Max runtime in minutes', default=np.inf)
     parser.add_argument('--max_epochs', type=int, default=10**8)
-    parser.add_argument('--dataset', type=str, default='mnist')
+    parser.add_argument('--dataset', type=str, default='cifar10')
     parser.add_argument('--ndata', type=int, help='Number of data points',
-                        default=23_710)
+                        default=4000)
     parser.add_argument('--save_checkpoint', action='store_true', 
             help='Save checkpoint at the end of training')
 

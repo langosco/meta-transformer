@@ -123,9 +123,9 @@ def main():
     parser.add_argument('--nsteps', type=int, default=100_000)
     parser.add_argument('--max_runtime', type=int, help='Max runtime in minutes', default=np.inf)
     parser.add_argument('--max_epochs', type=int, default=10**8)
-    parser.add_argument('--dataset', type=str, default='mnist')
+    parser.add_argument('--dataset', type=str, default='cifar10')
     parser.add_argument('--ndata', type=int, help='Number of data points',
-                        default=23_710)
+                        default=1500)
     parser.add_argument('--save_checkpoint', action='store_true', 
             help='Save checkpoint at the end of training')
 
@@ -133,8 +133,6 @@ def main():
     parser.add_argument('--tags', nargs='*', type=str, default=[])
     parser.add_argument('--notes', type=str, default=None, help="wandb notes")
 
-    parser.add_argument('--poison_types', nargs='*', type=str, default=["simple_pattern"])
-    parser.add_argument('--test_poison_type', type=str, default='none')
 #    parser.add_argument('--num_heads', type=int, help='Number of heads', default=16)
     parser.add_argument('--num_layers', type=int, help='Number of layers', default=None)
     parser.add_argument('--seed', type=int, default=42)
@@ -218,7 +216,7 @@ def main():
 
     wandb.init(
         mode="online" if args.use_wandb else "disabled",
-        project=f"detect-backdoors-{args.dataset}",
+        project=f"dropped-class-{args.dataset}",
         tags=args.tags,
         notes=args.notes,
         config={
@@ -228,7 +226,6 @@ def main():
             "batchsize": args.bs,
             "max_epochs": args.max_epochs,
             "dataset": args.dataset,
-            "poison_types": args.poison_types,
             "model_config": asdict(model),
             "num_datapoints": args.ndata,
             "adam/b1": args.adam_b1,
