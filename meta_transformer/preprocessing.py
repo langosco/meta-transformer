@@ -29,5 +29,5 @@ def chunk(params: dict[str, dict[str, ArrayLike]],
 
 def augment_and_chunk(rng, params, chunk_size, layers_to_permute) -> jax.Array:
     augmented = nnaugment.random_permutation(
-        rng, params, layers_to_permute, sort=True)
+        rng, params, layers_to_permute, sort=True, allow_permute_last=True)
     return chunk(augmented, chunk_size)[0]

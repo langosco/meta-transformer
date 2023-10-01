@@ -22,7 +22,11 @@ class Data:
         return Data(self.input[i], self.target[i], self.info[i] if self.info else None)
 
 
-def load_batch(filename):
+def load_batch(filename: str) -> list[dict]:
+    """Load a batch of checkpoints from a pickle file.
+    Returns a list of dictionaries. Each dictionary has keys
+    "params", "info", and "index".
+    """
     with open(filename, 'rb') as f:
         batch = pickle.load(f)
     return batch

@@ -31,7 +31,7 @@ logger = setup_logger(__name__)
 
 
 VAL_DATA_RATIO = 0.1
-LAYERS_TO_PERMUTE = ["Conv_0", "Conv_1", "Conv_2", "Conv_3", "Conv_4", "Conv_5"]
+LAYERS_TO_PERMUTE = ["Conv_0", "Conv_1", "Conv_2", "Conv_3", "Conv_4", "Conv_5", "Dense_6"]
 
 
 def create_loss_fn(model_forward: callable):
@@ -297,8 +297,8 @@ def main():
         state, stop_training = train(state)
         if stop_training:
             break
-    else:
-        validate()
+
+    validate()
         
 
     logger.info("==========================================================")
