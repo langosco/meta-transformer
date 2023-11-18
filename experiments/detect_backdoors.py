@@ -20,7 +20,7 @@ from nn_utils import schedules
 from meta_transformer import utils, preprocessing, module_path, on_cluster, output_dir, interactive
 from meta_transformer.meta_model import MetaModelClassifier, mup_adamw
 from meta_transformer.train import Updater, Logger
-from meta_transformer.data import Data, DataLoaderSingle, load_batches, load_batches_from_dirs
+from meta_transformer.data import Data, DataLoaderDetection, load_batches, load_batches_from_dirs
 from meta_transformer.logger_config import setup_logger
 from backdoors import paths
 
@@ -115,7 +115,7 @@ def load_data(rng, poison_types, test_poison_type, ndata, bs, chunk_size, augmen
         return (x - weights_mean) / weights_std
 
     subrng, rng = jax.random.split(rng)
-    train_loader = DataLoaderSingle(rng=subrng,
+    train_loader = DataLoaderDetection(rng=subrng,
                                 data=train_data,
                                 batch_size=bs,
                                 augment=augment,
@@ -125,7 +125,7 @@ def load_data(rng, poison_types, test_poison_type, ndata, bs, chunk_size, augmen
                                 normalize_fn=normalize_data)
 
     subrng, rng = jax.random.split(rng)
-    val_loader = DataLoaderSingle(rng=subrng,
+    val_loader = DataLoaderDetection(rng=subrng,
                             data=val_data,
                             batch_size=bs,
                             augment=False,
@@ -136,7 +136,7 @@ def load_data(rng, poison_types, test_poison_type, ndata, bs, chunk_size, augmen
     subrng, rng = jax.random.split(rng)
 
     if test_ood:
-        test_loader = DataLoaderSingle(rng=subrng,
+        test_loader = DataLoaderDetection(rng=subrng,
                                 data=ood_test_data,
                                 batch_size=bs,
                                 augment=False,
@@ -197,8 +197,9 @@ def main():
     rng = jax.random.PRNGKey(args.seed)
 
     # Load base model checkpoints
+    rng, subrng = jax.random.split(rng)
     train_loader, val_loader, test_loader = load_data(
-        rng, args.poison_types, args.test_poison_type, args.ndata,
+        subrng, args.poison_types, args.test_poison_type, args.ndata,
         args.bs, args.chunk_size, args.augment)
 
 
@@ -301,53 +302,29 @@ def main():
     # logger.info("Number of parameters per base model:")
 
 
-    # Training loop
 
-    # write fn with training loop logic?
-    # args:
-    # - initial state
-    # - train_loader
-    # - val_loader
+    def validate(state):
+        for batch in tqdm(val_loader, disable=disable_tqdm, desc="Validation"):
+            state, val_metrics, _ = updater.compute_val_metrics(state, batch)
+            metrics_logger.write(state, val_metrics, name="val")
 
-    # - max_epochs
-    # - max_runtime
-    # - max_steps
+        metrics_logger.flush_mean(state, name="val", 
+                verbose=disable_tqdm, extra_metrics={"epoch": epoch})
 
-    # - VAL_EVERY
-    # - disable_tqdm
-    # - save_checkpoint
-    # - checkpoint_dir
-
-    # - updater
-    # - metrics_logger
-    disable_tqdm = not interactive or args.disable_tqdm
-    VAL_EVERY = 10
-    start = time()
-    stop_training = False
-    for epoch in range(args.max_epochs):
-        train_loader.shuffle()
-
-        if epoch % VAL_EVERY == 0:
-            for batch in tqdm(val_loader, disable=disable_tqdm, desc="Validation"):
-                state, val_metrics, _ = updater.compute_val_metrics(state, batch)
-                metrics_logger.write(state, val_metrics, name="val")
-
-            metrics_logger.flush_mean(state, name="val", 
+        if test_loader is not None:
+            for batch in test_loader:
+                state, val_metrics, _ = updater.compute_val_metrics(
+                    state, batch, name="ood_test")
+                metrics_logger.write(state, val_metrics, name=f"ood_test")
+            metrics_logger.flush_mean(state, name=f"ood_test", 
                     verbose=disable_tqdm, extra_metrics={"epoch": epoch})
+        return state
 
-            if test_loader is not None:
-                for batch in test_loader:
-                    state, val_metrics, _ = updater.compute_val_metrics(
-                        state, batch, name="ood_test")
-                    metrics_logger.write(state, val_metrics, name=f"ood_test")
-                metrics_logger.flush_mean(state, name=f"ood_test", 
-                        verbose=disable_tqdm, extra_metrics={"epoch": epoch})
 
-            if stop_training:
-                break
-
-        for batch in tqdm(train_loader, 
-                disable=disable_tqdm, desc="Training"):
+    def train(state):
+        stop_training = False
+        train_loader.shuffle()
+        for batch in tqdm(train_loader, disable=disable_tqdm, desc="Training"):
             state, train_metrics = updater.update(state, batch)
             metrics_logger.write(state, train_metrics, name="train")
 
@@ -363,6 +340,21 @@ def main():
         
         metrics_logger.flush_mean(state, name="train",
                 verbose=disable_tqdm, extra_metrics={"epoch": epoch})
+        return state, stop_training
+
+
+    disable_tqdm = not interactive or args.disable_tqdm
+    VAL_EVERY = 10
+    start = time()
+    for epoch in range(args.max_epochs):
+        if epoch % VAL_EVERY == 0:
+            state = validate(state)
+        state, stop_training  = train(state)
+
+        if stop_training:
+            validate(state)
+            break
+
         
     logger.info("=======================================")
     logger.info("Completed.")

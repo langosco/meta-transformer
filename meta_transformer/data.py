@@ -121,51 +121,55 @@ class BaseDataLoader:
             self.batches = self.init_data_iterator()
             raise StopIteration
 
-
-class DataLoaderSingle(BaseDataLoader):
-    @partial(jax.jit, static_argnames="self")
-    def process_batch(self, rng, batch):
-        subrng, rng = jax.random.split(rng)
-        if self.augment:
-            rngs = jax.random.split(subrng, utils.tree_leaves_len(batch))
-            params = jax.vmap(self._augment_and_chunk)(rngs, batch["params"])
-        else:
-            params = jax.vmap(self._chunk)(batch["params"])
-        params = self.normalize_fn(params)
-        return Data(
-            input=params,
-            target=batch["labels"],
-        ), rng
-    
-    def _augment_and_chunk(self, rng, params):
-        return preprocessing.augment_and_chunk(
-            rng, params, self.chunk_size, self.layers_to_permute)
-    
-    def _chunk(self, params):
-        return preprocessing.chunk(params, self.chunk_size)[0]
-
     def shuffle(self):
         subrng, self.rng = jax.random.split(self.rng)
         l = utils.tree_leaves_len(self.data)
         perm = jax.random.permutation(subrng, l)
         self.data = jax.tree_map(lambda x: x[perm], self.data)
 
+    def _process(self, rng, params: dict):
+        """transform a single dict of params"""
+        if self.augment:
+            out = preprocessing.augment_and_chunk(
+                rng, params, self.chunk_size, self.layers_to_permute)
+        else:
+            out = preprocessing.chunk(params, self.chunk_size)[0]
+        return self.normalize_fn(out)
 
-class DataLoaderPair(BaseDataLoader):
+
+class DataLoaderDetection(BaseDataLoader):
+    """Dataloader for the backdoor detection task"""
+    @partial(jax.jit, static_argnames="self")
     def process_batch(self, rng, batch):
-        return NotImplementedError()
-
-    def shuffle(self):
-        perm = self.rng.permutation(len(self.data))
+        subrng, rng = jax.random.split(rng)
+        rngs = jax.random.split(subrng, utils.tree_leaves_len(batch))
+        params = jax.vmap(self._process)(rngs, batch["params"])
         return Data(
-            input=[self.data.backdoored[i] for i in perm],
-            target=[self.data.clean[i] for i in perm],
-            info=[self.data.info[i] for i in perm],
-        )
-    
+            input=params,
+            target=batch["labels"],
+        ), rng
 
-def validate_shapes(batch):
-    """Check that the shapes are correct."""
-    if not batch.backdoors.shape == batch.clean.shape:
-        raise ValueError("Input and target shapes do not match. "
-                            f"Got {batch.backdoors.shape} and {batch.clean.shape}.")
+
+class DataLoaderDepoison(BaseDataLoader):
+    """Dataloader for the backdoor removal task (depoisoning)"""
+    @partial(jax.jit, static_argnames="self")
+    def process_batch(self, rng, batch):
+        subrng, rng = jax.random.split(rng)
+        rngs = jax.random.split(subrng, utils.tree_leaves_len(batch))
+        return Data(
+            input=jax.vmap(self._process)(rngs, batch["backd"]),
+            target=jax.vmap(self._process)(rngs, batch["clean"]),
+            info=batch["info"] if "info" in batch else None,
+        ), rng
+
+
+class DataLoaderTrainId(BaseDataLoader):
+    """Dataloader for the backdoor removal task (depoisoning)"""
+    @partial(jax.jit, static_argnames="self")
+    def process_batch(self, rng, batch):
+        subrng, rng = jax.random.split(rng)
+        rngs = jax.random.split(subrng, utils.tree_leaves_len(batch))
+        return Data(
+            input=jax.vmap(self._process)(rngs, batch["backd"]),
+            target=None,
+        ), rng
