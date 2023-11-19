@@ -176,6 +176,10 @@ def main():
 
     logger.info("Args:\n%s", pprint.pformat(vars(args)))
 
+    if args.dataset != "cifar10":
+        raise NotImplementedError(
+            "I don't have any base models for other datasets yet.")
+
     rng = jax.random.PRNGKey(args.seed)
 
     # Load base model checkpoints
