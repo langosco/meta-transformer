@@ -64,7 +64,8 @@ def create_loss_fn(model_forward: callable):
 
 def load_data(rng, poison_type, ndata, bs, chunk_size, augment):
     logger.info("Loading data...")
-    poison_dir = paths.load_from / "secondary/backdoor/" / poison_type
+    # why secondary? why poison? might as well pick any other combo
+    poison_dir = backdoors.utils.get_checkpoint_path(paths.load_from, dataset="cifar10", train_status="secondary", backdoor_status="backdoor") / poison_type
     poisoned_data = load_batches(poison_dir, max_datapoints=ndata)
     if len(poisoned_data) < ndata:
         logger.warning(f"Loaded only {len(poisoned_data)} datapoints.")

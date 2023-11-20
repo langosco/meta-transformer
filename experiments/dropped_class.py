@@ -25,6 +25,8 @@ from meta_transformer.train import Updater, Logger, TrainState
 from meta_transformer.data import Data, load_batches, DataLoaderSingle
 from meta_transformer.logger_config import setup_logger
 from backdoors import paths
+import backdoors.utils
+
 
 START_TIME = time()
 logger = setup_logger(__name__)
@@ -65,7 +67,8 @@ def stack_data(data):
 def load_data(rng, ndata, bs, chunk_size, augment):
     logger.info("Loading data...")
 
-    data = load_batches(paths.PRIMARY_CLEAN / "drop_class", max_datapoints=ndata)
+    loaddir = backdoors.utils.get_checkpoint_path(paths.load_from, dataset="cifar10", train_status="primary", backdoor_status="clean") / "drop_class"
+    data = load_batches(loaddir, max_datapoints=ndata)
     
     with jax.default_device(jax.devices("cpu")[0]):  # keep data on cpu
         shuffle(data)

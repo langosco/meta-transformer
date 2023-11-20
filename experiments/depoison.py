@@ -64,11 +64,13 @@ def create_loss_fn(model_forward: callable):
     return loss_fn
 
 
-def load_data(rng, poison_type, ndata, bs, chunk_size, augment):
+def load_data(rng, dataset, poison_type, ndata, bs, chunk_size, augment):
     logger.info("Loading data...")
+    if dataset == "mnist":
+        paths.load_from = paths.checkpoint_dir  # use default checkpoint dir (mnist models trained locally vs HPC)
 
-    clean_dir = paths.load_from / "primary/clean/clean_1"
-    poison_dir = paths.load_from / "secondary/backdoor/" / poison_type
+    clean_dir = backdoors.utils.get_checkpoint_path(paths.load_from, dataset=dataset, train_status="primary", backdoor_status="clean") / "clean_1"
+    poison_dir = backdoors.utils.get_checkpoint_path(paths.load_from, dataset=dataset, train_status="secondary", backdoor_status="backdoor") / poison_type
 
     poisoned_data = load_batches(poison_dir, max_datapoints=ndata)
     clean_data = load_batches(clean_dir, max_datapoints=ndata)
@@ -76,7 +78,6 @@ def load_data(rng, poison_type, ndata, bs, chunk_size, augment):
     if l < len(poisoned_data) or l < len(clean_data):
         logger.warning(f"Loaded only {l} datapoints.")
         poisoned_data, clean_data = poisoned_data[:l], clean_data[:l]
-
 
 
     split_idx = utils.split_data(np.arange(len(poisoned_data)), VAL_DATA_RATIO)
@@ -175,18 +176,13 @@ def main():
     args.tags.append(args.dataset)
 
     logger.info("Args:\n%s", pprint.pformat(vars(args)))
-
-    if args.dataset != "cifar10":
-        raise NotImplementedError(
-            "I don't have any base models for other datasets yet.")
-
     rng = jax.random.PRNGKey(args.seed)
 
     # Load base model checkpoints
     subrng, rng = jax.random.split(rng)
-    train_loader, val_loader, unnormalize = load_data(
-        subrng, args.poison_type, args.ndata,
-        args.bs, args.chunk_size, args.augment)
+    train_loader, val_loader, unnormalize = load_data(subrng,
+        args.dataset, args.poison_type, args.ndata,
+        bs=args.bs, chunk_size=args.chunk_size, augment=args.augment)
 
 
     # Meta-Model Initialization
@@ -248,18 +244,19 @@ def main():
     checkpoint_savename = f"run_{int(time())}"
 
     if args.validate_output:
-        assert args.dataset.lower() == "cifar10"
-        cifar10_test = backdoors.data.load_cifar10(split="test")
-        cifar10_poisoned = backdoors.poison.filter_and_poison_all(
-            cifar10_test, target_label=range(10), poison_type=args.poison_type)
+       # assert args.dataset.lower() == "cifar10"
+        img_data_test = backdoors.data.load_img_data(args.dataset, split="test")
+        img_data_poisoned = backdoors.poison.filter_and_poison_all(
+            img_data_test, target_label=range(10), poison_type=args.poison_type)
+        base_model = backdoors.train.Train(backdoors.models.CNN(), None)
 
 
     def validate_base(carry, params_and_target: (Data, int)):
         """Validate reconstructed base model."""
         base_params, target_label = params_and_target
-        acc = backdoors.train.accuracy_from_params(base_params, cifar10_test)
-        attack_success_rate = backdoors.train.accuracy_from_params(
-            base_params, cifar10_poisoned[target_label])
+        acc = base_model.accuracy_from_params(base_params, img_data_test)
+        attack_success_rate = base_model.accuracy_from_params(
+            base_params, img_data_poisoned[target_label])
 
         metrics = dict(
             accuracy=acc,
@@ -395,4 +392,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    with jax.default_device(jax.devices("cpu")[0]):
+        main()

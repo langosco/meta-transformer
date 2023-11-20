@@ -23,6 +23,7 @@ from meta_transformer.train import Updater, Logger
 from meta_transformer.data import Data, DataLoaderDetection, load_batches, load_batches_from_dirs
 from meta_transformer.logger_config import setup_logger
 from backdoors import paths
+import backdoors.utils
 
 START_TIME = time()
 logger = setup_logger(__name__)
@@ -60,8 +61,13 @@ def load_data(rng, poison_types, test_poison_type, ndata, bs, chunk_size, augmen
     logger.info("Loading data...")
     test_ood = test_poison_type != "none"
 
-    dirs = [paths.PRIMARY_BACKDOOR / x for x in poison_types]
-    test_dir = paths.PRIMARY_BACKDOOR / test_poison_type
+    dirs = [
+        backdoors.utils.get_checkpoint_path(
+            paths.load_from, dataset="cifar10", train_status="primary", backdoor_status="backdoor") / x 
+            for x in poison_types
+        ]
+    test_dir = backdoors.utils.get_checkpoint_path(
+        paths.load_from, dataset="cifar10", train_status="primary", backdoor_status="backdoor") / test_poison_type
 
     poisoned_data = load_batches_from_dirs(dirs, max_datapoints_per_dir=ndata // 2 // len(dirs))
     clean_data = load_batches(paths.PRIMARY_CLEAN / "clean_1", max_datapoints=ndata // 2)
