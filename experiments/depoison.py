@@ -69,8 +69,8 @@ def load_data(rng, dataset, poison_type, ndata, bs, chunk_size, augment):
     if dataset == "mnist":
         paths.load_from = paths.checkpoint_dir  # use default checkpoint dir (mnist models trained locally vs HPC)
 
-    clean_dir = backdoors.utils.get_checkpoint_path(paths.load_from, dataset=dataset, train_status="primary", backdoor_status="clean") / "clean_1"
     poison_dir = backdoors.utils.get_checkpoint_path(paths.load_from, dataset=dataset, train_status="secondary", backdoor_status="backdoor") / poison_type
+    clean_dir = backdoors.utils.get_checkpoint_path(paths.load_from, dataset=dataset, train_status="primary", backdoor_status="clean") / "clean_0"
 
     poisoned_data = load_batches(poison_dir, max_datapoints=ndata)
     clean_data = load_batches(clean_dir, max_datapoints=ndata)
@@ -169,11 +169,18 @@ def main():
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--disable_tqdm', action='store_true')
     parser.add_argument('--augment', action='store_true', help="Augment base models via permutations")
+    
+    parser.add_argument('--load_primary_backdoored', action='store_true', help='Use backdoored primary model,'
+                        'ie use models trained with a backdoor originally, and then cleaned afterwards.'
+                        'The default behavior is to instead have the clean models be the primary ones.')
     args = parser.parse_args()
 
     args.dataset = args.dataset.lower()
     args.tags.append("HPC" if on_cluster else "local")
     args.tags.append(args.dataset)
+
+    if args.load_primary_backdoored:
+        raise NotImplementedError("Not implemented yet.")  # just need to change train status when loading data
 
     logger.info("Args:\n%s", pprint.pformat(vars(args)))
     rng = jax.random.PRNGKey(args.seed)
@@ -246,17 +253,17 @@ def main():
     if args.validate_output:
        # assert args.dataset.lower() == "cifar10"
         img_data_test = backdoors.data.load_img_data(args.dataset, split="test")
-        img_data_poisoned = backdoors.poison.filter_and_poison_all(
-            img_data_test, target_label=range(10), poison_type=args.poison_type)
-        base_model = backdoors.train.Train(backdoors.models.CNN(), None)
+        base_model = backdoors.train.Model(backdoors.models.CNN(), None)
 
 
-    def validate_base(carry, params_and_target: (Data, int)):
+    def validate_base(carry, model_info: (Data, int, jax.random.PRNGKey)):
         """Validate reconstructed base model."""
-        base_params, target_label = params_and_target
+        base_params, target_label, poison_rng = model_info
+        img_data_test_poisoned = backdoors.poison.poison_test_data(
+            poison_rng, img_data_test, target_label, args.poison_type)
+
         acc = base_model.accuracy_from_params(base_params, img_data_test)
-        attack_success_rate = base_model.accuracy_from_params(
-            base_params, img_data_poisoned[target_label])
+        attack_success_rate = base_model.accuracy_from_params(base_params, img_data_test_poisoned)
 
         metrics = dict(
             accuracy=acc,
@@ -267,11 +274,11 @@ def main():
 
 
     @jax.jit
-    def get_reconstruction_metrics(meta_model_outputs, target_labels):
+    def get_reconstruction_metrics(meta_model_outputs, target_labels, poison_rngs):
         base_params = unnormalize(meta_model_outputs)
         base_params = jax.vmap(unchunk)(base_params)  # dict of seqs of params
         _, out_metrics = jax.lax.scan(  # equivalent to [validate_base(None, [p, t]) for p, t in zip(base_params, target_labels)]
-            validate_base, None, (base_params, target_labels))
+            validate_base, None, (base_params, target_labels, poison_rngs))
         return {k: v.mean() for k, v in out_metrics.items()}
 
 
@@ -320,7 +327,11 @@ def main():
         for batch in val_loader:
             state, val_metrics, aux = updater.compute_val_metrics(state, batch)
             if args.validate_output:  # validate depoisoning
-                rmetrics = get_reconstruction_metrics(aux["outputs"], target_labels=batch.info['target_label'])
+                rmetrics = get_reconstruction_metrics(
+                    aux["outputs"],
+                    target_labels=batch.info['target_label'],
+                    poison_rngs=batch.info['poison_seed']
+                )
                 val_metrics.update(rmetrics)
             metrics_logger.write(state, val_metrics, name="val")
 
@@ -392,5 +403,4 @@ def main():
 
 
 if __name__ == "__main__":
-    with jax.default_device(jax.devices("cpu")[0]):
-        main()
+    main()
