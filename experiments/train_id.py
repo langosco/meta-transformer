@@ -100,13 +100,13 @@ def load_data(rng, poison_type, ndata, bs, chunk_size, augment):
 
     subrng, rng = jax.random.split(rng)
     train_loader = DataLoaderTrainId(rng=subrng,
-                                data=train_data,
-                                batch_size=bs,
-                                augment=augment,
-                                skip_last_batch=True,
-                                layers_to_permute=None if not augment else LAYERS_TO_PERMUTE,
-                                chunk_size=chunk_size,
-                                normalize_fn=normalize_data)
+                            data=train_data,
+                            batch_size=bs,
+                            augment=augment,
+                            skip_last_batch=True,
+                            layers_to_permute=None if not augment else LAYERS_TO_PERMUTE,
+                            chunk_size=chunk_size,
+                            normalize_fn=normalize_data)
 
     subrng, rng = jax.random.split(rng)
     val_loader = DataLoaderTrainId(rng=subrng,
@@ -249,11 +249,12 @@ def main():
     if args.validate_output:
         assert args.dataset.lower() == "cifar10"
         cifar10_test = backdoors.data.load_cifar10(split="test")
+        base_model = backdoors.train.Model(backdoors.models.CNN(), None)
 
 
     def validate_base(carry, params: Data):
         """Validate reconstructed base model."""
-        acc = backdoors.train.accuracy_from_params(params, cifar10_test)
+        acc = base_model.accuracy_from_params(base_params, cifar10_test)
         metrics = dict(accuracy=acc)
         carry = None  # dummy carry for lax.scan (could be vmap but not enough memory)
         return carry, {"out/" + k: v for k, v in metrics.items()}
