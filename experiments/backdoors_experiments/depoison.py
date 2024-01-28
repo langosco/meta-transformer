@@ -305,7 +305,7 @@ def main():
             "augment": args.augment,
             "save_checkpoint": args.save_checkpoint,
         },
-        )  
+    )  
     
 
     logger.info(f"Tags: {args.tags}")
